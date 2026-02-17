@@ -221,17 +221,13 @@ Nouveau système:
 
 ### Comment ça Fonctionne
 
-**1. Extraction de la Photo**
+**1. Extraction de la Photo (People API)**
 ```javascript
-// Dans convertirContactToObject
-let photoBlob = null;
-try {
-  const photo = contact.getContactPhoto();
-  if (photo) {
-    photoBlob = photo; // Blob de l'image
-  }
-} catch (e) {
-  // Pas de photo, normal
+// Dans convertirPersonToObject
+let photoUrl = null;
+const photos = person.photos || [];
+if (photos.length > 0 && !photos[0].default) {
+  photoUrl = photos[0].url;  // URL de la photo
 }
 ```
 
@@ -239,18 +235,22 @@ try {
 ```javascript
 return {
   // ... autres champs ...
-  photo: photoBlob  // Photo incluse dans l'objet contact
+  photoUrl: photoUrl  // URL de la photo (ou null)
 };
 ```
 
 **3. Fusion Intelligente**
 ```javascript
-function fusionnerPhotos(contactDest, dataSource) {
-  // Si source a une photo et destination n'en a pas
-  if (dataSource.photo && !contactDest.getContactPhoto()) {
-    contactDest.setContactPhoto(dataSource.photo);
-  }
-  // Si destination a déjà une photo, on la garde
+function fusionnerPhotos(contactDestData, dataSource) {
+  if (!dataSource.photoUrl) return;           // Pas de photo source
+  if (contactDestData.photoUrl) return;       // Destination a déjà une photo
+
+  // Télécharger et appliquer la photo via People API
+  const response = UrlFetchApp.fetch(dataSource.photoUrl);
+  const photoBytes = Utilities.base64Encode(response.getContent());
+  People.People.updateContactPhoto({
+    photoBytes: photoBytes
+  }, contactDestData.resourceName);
 }
 ```
 

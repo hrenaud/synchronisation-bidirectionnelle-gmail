@@ -30,27 +30,49 @@
 1. Dans l'éditeur, vous voyez du code par défaut qui commence par `function myFunction()`
 2. **Sélectionnez TOUT le code** (Ctrl+A ou Cmd+A)
 3. **Supprimez-le** (touche Suppr)
-4. **Copiez le code du fichier `ContactSync.gs`** que je vous ai fourni
+4. **Copiez le code du fichier `ContactSync_Advanced.gs`** que je vous ai fourni
 5. **Collez-le** dans l'éditeur (Ctrl+V ou Cmd+V)
 
-### 2.2 Personnaliser la configuration
+### 2.2 Activer le service People API
 
-Trouvez cette section au début du code (lignes 11-18) :
+1. Dans le panneau de gauche, cliquez sur **Services** (icône **+**)
+2. Cherchez **People API** dans la liste
+3. Cliquez sur **Ajouter**
+
+> **⚠️ Sans cette étape, le script ne fonctionnera pas** (erreur "People is not defined").
+
+### 2.3 Personnaliser la configuration
+
+Trouvez cette section au début du code :
 
 ```javascript
 const CONFIG = {
   COMPTE_SECONDAIRE: 'votre-email-secondaire@gmail.com',
   PREFIX_NOTES: '[SYNC]',
-  DEBUG_MODE: true
+  DEBUG_MODE: true,
+  LABEL_SYNC: 'Synchronisés',
+  STRATEGIE_CONFLIT: 'merge',
+  INCLURE_CONTACTS_SANS_EMAIL: true,
+  SUPPRIMER_CONTACTS_VIDES: false,
+  EMAIL_RAPPORT: null
 };
 ```
 
-**Modifiez uniquement la ligne 12 :**
-- Remplacez `'votre-email-secondaire@gmail.com'` par l'adresse de votre second compte Gmail
-- Exemple : `'mon.autre.email@gmail.com'`
+**Modifiez les lignes suivantes :**
+
+1. **`COMPTE_SECONDAIRE`** (OBLIGATOIRE) :
+   - Remplacez `'votre-email-secondaire@gmail.com'` par l'adresse de votre second compte
+   - Exemple : `'mon.autre.email@gmail.com'`
+
+2. **`EMAIL_RAPPORT`** (recommandé) :
+   - Adresse où recevoir les rapports de synchronisation
+   - Mettez une adresse `@gmail.com` pour éviter les blocages DMARC
+   - Exemple : `EMAIL_RAPPORT: 'votre-nom@gmail.com'`
+   - Si `null`, utilise l'email du compte actif (peut être bloqué par DMARC sur les domaines personnalisés)
+
 - **IMPORTANT : Gardez les guillemets !**
 
-### 2.3 Sauvegarder
+### 2.4 Sauvegarder
 
 1. Cliquez sur l'icône **disquette** 💾 (ou Ctrl+S)
 2. Le code est maintenant sauvegardé !
@@ -61,7 +83,7 @@ const CONFIG = {
 
 ### 3.1 Premier test simple
 
-1. Dans le menu déroulant en haut (à côté du bouton ▶️), sélectionnez : **`testerScript`**
+1. Dans le menu déroulant en haut (à côté du bouton ▶️), sélectionnez : **`simulerSynchronisation`**
 2. Cliquez sur le bouton **Exécuter** ▶️
 3. **PREMIÈRE FOIS UNIQUEMENT** : Une fenêtre d'autorisation apparaît
 
@@ -84,12 +106,11 @@ Google affiche cet avertissement car c'est VOTRE script personnel. C'est normal 
 1. Après l'exécution, cliquez sur **"Journal d'exécution"** (en bas de l'écran)
 2. Vous devriez voir :
    ```
-   === TEST DU SCRIPT ===
-   Nombre de contacts: XX
-   Contact 1: [nom] - [email]
-   Contact 2: [nom] - [email]
+   === MODE SIMULATION (AUCUNE MODIFICATION) ===
    ...
-   === TEST TERMINÉ ===
+   === RÉSUMÉ SIMULATION ===
+   Ajouts prévus: XX
+   Modifications prévues: XX
    ```
 
 ✅ **Si vous voyez cela, le script fonctionne !**
@@ -100,7 +121,7 @@ Google affiche cet avertissement car c'est VOTRE script personnel. C'est normal 
 
 ### 4.1 Configurer le déclencheur
 
-1. Dans le menu déroulant, sélectionnez : **`configurerDeclencheur`**
+1. Dans le menu déroulant, sélectionnez : **`configurerSyncDrive`**
 2. Cliquez sur **Exécuter** ▶️
 3. Attendez quelques secondes
 
@@ -108,7 +129,7 @@ Google affiche cet avertissement car c'est VOTRE script personnel. C'est normal 
 
 1. Dans le menu de gauche, cliquez sur l'icône **⏰ Déclencheurs** (horloge)
 2. Vous devriez voir une ligne avec :
-   - Fonction : `synchroniserContacts`
+   - Fonction : `syncViaGoogleDrive`
    - Type d'événement : `Déclencheur temporel`
    - Fréquence : `Quotidien`
 
@@ -154,36 +175,36 @@ Cela permettra à votre compte principal d'accéder aux contacts du secondaire.
 
 ### Changer la fréquence de synchronisation
 
-Par défaut : quotidien à 2h du matin.
+Par défaut : quotidien à 3h du matin.
 
 Pour modifier :
 
 1. Ouvrez le code
-2. Trouvez la fonction `configurerDeclencheur()` (ligne ~150)
+2. Trouvez la fonction `configurerSyncDrive()`
 3. Modifiez cette partie :
 
 ```javascript
 // Pour synchroniser toutes les heures :
-ScriptApp.newTrigger('synchroniserContacts')
+ScriptApp.newTrigger('syncViaGoogleDrive')
   .timeBased()
   .everyHours(1)
   .create();
 
 // Pour synchroniser toutes les 6 heures :
-ScriptApp.newTrigger('synchroniserContacts')
+ScriptApp.newTrigger('syncViaGoogleDrive')
   .timeBased()
   .everyHours(6)
   .create();
 
 // Pour synchroniser tous les lundis à 9h :
-ScriptApp.newTrigger('synchroniserContacts')
+ScriptApp.newTrigger('syncViaGoogleDrive')
   .timeBased()
   .onWeekDay(ScriptApp.WeekDay.MONDAY)
   .atHour(9)
   .create();
 ```
 
-4. Sauvegardez et réexécutez `configurerDeclencheur`
+4. Sauvegardez et réexécutez `configurerSyncDrive`
 
 ---
 
@@ -215,10 +236,19 @@ ScriptApp.newTrigger('synchroniserContacts')
 
 ### Je ne reçois pas d'emails de rapport
 
-**Vérifiez :**
+**Cause la plus fréquente : blocage DMARC**
+
+Si votre compte utilise un domaine personnalisé (ex: `@entreprise.fr`), les emails envoyés par Google Apps Script peuvent être bloqués par la politique DMARC de votre domaine.
+
+**Solution :** Configurez `EMAIL_RAPPORT` avec une adresse `@gmail.com` :
+```javascript
+EMAIL_RAPPORT: 'votre-nom@gmail.com'
+```
+
+**Autres vérifications :**
 1. Votre dossier spam
 2. Que les notifications Gmail sont activées
-3. L'adresse email dans `Session.getActiveUser().getEmail()`
+3. Les logs d'exécution (le contenu du rapport y est affiché même si l'email échoue)
 
 ---
 
@@ -252,7 +282,7 @@ Vous recevrez un email après chaque synchronisation avec :
 
 - La synchronisation n'est pas instantanée
 - Selon votre configuration : de 1h à 24h de délai
-- Pour une synchronisation immédiate, exécutez manuellement `synchroniserContacts`
+- Pour une synchronisation immédiate, exécutez manuellement `syncViaGoogleDrive`
 
 ### Conflits
 
@@ -287,7 +317,7 @@ Si vous rencontrez des problèmes :
 
 1. **Consultez les logs** : Menu Exécutions dans Apps Script
 2. **Vérifiez les emails de rapport** : ils contiennent des informations utiles
-3. **Réexécutez le test** : Fonction `testerScript` pour diagnostiquer
+3. **Réexécutez le test** : Fonction `simulerSynchronisation` pour diagnostiquer
 
 ---
 
@@ -297,7 +327,7 @@ Avant de fermer ce guide, vérifiez que :
 
 - [ ] Le projet Apps Script est créé et nommé
 - [ ] Le code est copié et personnalisé (email secondaire)
-- [ ] Le script a été testé avec succès (`testerScript`)
+- [ ] Le script a été testé avec succès (`simulerSynchronisation`)
 - [ ] Le déclencheur automatique est configuré
 - [ ] Vous avez reçu l'email de confirmation
 - [ ] L'accès au compte secondaire est configuré

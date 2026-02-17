@@ -1,10 +1,9 @@
 # ✅ VÉRIFICATION FINALE - Tout est Prêt
 
-## 📦 FICHIERS LIVRÉS (9 fichiers)
+## 📦 FICHIERS LIVRÉS (8 fichiers)
 
-### Scripts (2 fichiers)
-- ✅ **ContactSync_Advanced.gs** (1218 lignes, 39 KB) - Script principal
-- ✅ **ContactSync.gs** (221 lignes, 6.6 KB) - Version simple/référence
+### Script
+- ✅ **ContactSync_Advanced.gs** - Script principal (People API v1)
 
 ### Documentation (7 fichiers)
 - ✅ **LISEZMOI_COMPLET.md** (484 lignes, 13 KB) - À lire EN PREMIER
@@ -132,11 +131,15 @@ const CONFIG = {
   DEBUG_MODE: true, // Recommandé pour première utilisation
   LABEL_SYNC: 'Synchronisés',
   STRATEGIE_CONFLIT: 'merge', // ✅ FUSION INTELLIGENTE
-  INCLURE_CONTACTS_SANS_EMAIL: true // ✅ CONTACTS AVEC TÉLÉPHONE
+  INCLURE_CONTACTS_SANS_EMAIL: true, // ✅ CONTACTS AVEC TÉLÉPHONE
+  SUPPRIMER_CONTACTS_VIDES: false, // Nettoyage optionnel
+  EMAIL_RAPPORT: null // Adresse @gmail.com recommandée (évite blocages DMARC)
 };
 ```
 
-**Seul paramètre OBLIGATOIRE à modifier : `COMPTE_SECONDAIRE`**
+**Paramètres à modifier :**
+- `COMPTE_SECONDAIRE` (OBLIGATOIRE) : l'email de l'autre compte
+- `EMAIL_RAPPORT` (recommandé) : une adresse `@gmail.com` pour recevoir les rapports sans blocage DMARC
 
 ---
 

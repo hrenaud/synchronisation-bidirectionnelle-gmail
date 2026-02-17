@@ -49,19 +49,17 @@
 
 ## 📁 FICHIERS FOURNIS
 
-### Scripts (2 fichiers)
+### Script
 
-1. **ContactSync_Advanced.gs** ⭐ RECOMMANDÉ
+1. **ContactSync_Advanced.gs** ⭐ SCRIPT PRINCIPAL
+   - Utilise People API (v1)
    - Synchronisation via Google Drive
-   - Fusion intelligente
-   - Toutes les fonctionnalités avancées
+   - Fusion intelligente et détection des doublons
+   - Support des organisations/entreprises
+   - Nettoyage des contacts vides (optionnel)
    - À installer sur LES DEUX comptes
 
-2. **ContactSync.gs**
-   - Version simple/fallback
-   - Pour référence uniquement
-
-### Documentation (7 fichiers)
+### Documentation
 
 1. **LISEZMOI_COMPLET.md** (ce fichier)
    - Vue d'ensemble complète
@@ -452,7 +450,6 @@ Active la synchronisation quotidienne automatique.
 
 ### Ressources
 - Documentation Google Apps Script
-- Documentation ContactsApp
 - Documentation People API
 - Les 7 fichiers de documentation fournis
 

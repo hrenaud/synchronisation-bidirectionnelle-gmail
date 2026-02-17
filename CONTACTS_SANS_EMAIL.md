@@ -61,14 +61,16 @@ Pour éviter les doublons, les numéros sont normalisés :
 | `00 33 6 12 34 56 78` | `+33612345678` | ✅ Valide |
 | `06-12-34-56-78` | `+33612345678` | ✅ Valide |
 | `(06) 12.34.56.78` | `+33612345678` | ✅ Valide |
-| `123` | - | ❌ Invalide (trop court) |
+| `123` | `123` | ✅ Valide (numéro court) |
+| `38643` | `38643` | ✅ Valide (numéro court) |
+| `12` | - | ❌ Invalide (trop court) |
 
 ### Règles de Normalisation
 
 1. **Suppression** de tous les caractères sauf chiffres et `+`
 2. **Remplacement** de `00` par `+` au début
 3. **Ajout automatique** de `+33` pour les numéros français commençant par `0`
-4. **Validation** : minimum 8 chiffres requis
+4. **Validation** : minimum 3 chiffres (numéros courts FR, internationaux courts acceptés)
 
 ---
 
@@ -390,7 +392,7 @@ Pour un utilisateur typique avec 300 contacts :
 ### Ce qui ne fonctionne pas :
 
 ❌ Contacts sans email ni téléphone
-❌ Numéros trop courts (<8 chiffres)
+❌ Numéros trop courts (<3 chiffres)
 ❌ Numéros invalides (lettres, symboles)
 
 ---

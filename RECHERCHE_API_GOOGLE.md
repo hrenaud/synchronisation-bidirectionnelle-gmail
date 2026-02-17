@@ -1,5 +1,7 @@
 # 🔍 RECHERCHE : Fonctionnalités Natives Google Contacts API
 
+> **⚠️ NOTE (Février 2026) :** ContactsApp est **déprécié**. Ce projet utilise désormais exclusivement le service avancé **People API (v1)**. Ce document est conservé à titre de référence historique pour comprendre les choix techniques.
+
 ## 🎯 La Question
 
 **Existe-t-il des fonctionnalités natives dans l'API Google Contacts qui pourraient remplacer notre code personnalisé ?**
@@ -8,11 +10,11 @@
 
 ## 📚 API Disponibles
 
-### 1. ContactsApp (Google Apps Script)
-API de base, simple et limitée
+### 1. ~~ContactsApp (Google Apps Script)~~ — DÉPRÉCIÉ
+API de base, simple et limitée. **Supprimée par Google en 2025.**
 
-### 2. People API (Advanced)
-API REST plus complète, nécessite activation
+### 2. People API (Advanced) — UTILISÉ
+API REST complète, utilisée par ce projet
 
 ---
 
