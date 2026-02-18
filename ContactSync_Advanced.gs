@@ -11,31 +11,54 @@
 // CONFIGURATION
 // ============================================
 
+// Propriétés du script (Paramètres du projet → Propriétés du script)
+// COMPTE_SECONDAIRE : email de l'autre compte (OBLIGATOIRE)
+// EMAIL_RAPPORT     : email pour les rapports (recommandé : adresse @gmail.com)
+// COMPTE_PRO        : 'true' si compte Workspace/payant (limite 30 min au lieu de 6 min)
+const PROPS = PropertiesService.getScriptProperties();
+
 const CONFIG = {
-  COMPTE_SECONDAIRE: 'votre-email-secondaire@gmail.com',
+  // Lus depuis les Propriétés du script (ne pas modifier ici)
+  COMPTE_SECONDAIRE: PROPS.getProperty('COMPTE_SECONDAIRE') || 'votre-email-secondaire@gmail.com',
+  EMAIL_RAPPORT: PROPS.getProperty('EMAIL_RAPPORT') || null,
+  COMPTE_PRO: PROPS.getProperty('COMPTE_PRO') === 'true',
+
+  // Paramètres modifiables dans le code
   PREFIX_NOTES: '[SYNC]',
   DEBUG_MODE: true,
-  
-  // ID du label/groupe pour les contacts synchronisés (optionnel)
   LABEL_SYNC: 'Synchronisés',
-  
-  // Stratégie de résolution des conflits
+
   // 'merge' = Fusion intelligente (RECOMMANDÉ) - combine les infos sans rien perdre
   // 'recent' = Le plus récent écrase l'ancien - RISQUE DE PERTE DE DONNÉES
   STRATEGIE_CONFLIT: 'merge',
-  
-  // Gestion des contacts sans email (avec numéro de téléphone uniquement)
-  INCLURE_CONTACTS_SANS_EMAIL: true, // true = synchroniser aussi les contacts avec seulement un téléphone
 
-  // Supprimer les contacts complètement vides (aucun nom, email, téléphone, entreprise, adresse, note)
-  // false = les ignorer silencieusement, true = les supprimer pour faire le ménage
-  SUPPRIMER_CONTACTS_VIDES: false,
+  // true = synchroniser aussi les contacts avec seulement un téléphone
+  INCLURE_CONTACTS_SANS_EMAIL: true,
 
-  // Adresse email pour recevoir les rapports de synchronisation
-  // null = utilise l'email du compte actif (Session.getActiveUser())
-  // Si vos emails de rapport sont bloqués (DMARC), mettez une adresse @gmail.com ici
-  EMAIL_RAPPORT: null
+  // true = supprimer les contacts complètement vides (aucun champ rempli)
+  SUPPRIMER_CONTACTS_VIDES: false
 };
+
+/**
+ * Configure les propriétés du script (à exécuter UNE FOIS par compte).
+ * Après exécution, les valeurs sont visibles dans :
+ * Paramètres du projet (roue dentée) → Propriétés du script
+ */
+function configurerCompte() {
+  // ⚠️ MODIFIER CES VALEURS AVANT D'EXÉCUTER
+  PROPS.setProperties({
+    'COMPTE_SECONDAIRE': 'votre-email-secondaire@gmail.com',
+    'EMAIL_RAPPORT': 'votre-email-rapport@gmail.com',
+    'COMPTE_PRO': 'false'  // 'true' pour Workspace/payant (limite 30 min), 'false' pour gratuit (limite 6 min)
+  });
+
+  Logger.log('✅ Propriétés configurées :');
+  Logger.log(`  COMPTE_SECONDAIRE = ${PROPS.getProperty('COMPTE_SECONDAIRE')}`);
+  Logger.log(`  EMAIL_RAPPORT = ${PROPS.getProperty('EMAIL_RAPPORT')}`);
+  Logger.log(`  COMPTE_PRO = ${PROPS.getProperty('COMPTE_PRO')}`);
+  Logger.log('');
+  Logger.log('Vous pouvez aussi les modifier dans : Paramètres du projet → Propriétés du script');
+}
 
 // ============================================
 // UTILITAIRE EMAIL
@@ -54,6 +77,49 @@ function envoyerRapport(sujet, corps) {
     Logger.log(`⚠️ Impossible d'envoyer l'email de rapport: ${e.message}`);
     Logger.log(`   Sujet: ${sujet}`);
     Logger.log(`   Consultez les logs pour voir le contenu du rapport.`);
+  }
+}
+
+// ============================================
+// UTILITAIRE THROTTLE API
+// ============================================
+
+/**
+ * Exécute une fonction avec retry automatique en cas de dépassement de quota.
+ * Attend entre chaque appel pour respecter les limites People API.
+ */
+// Heure de début pour le garde-fou temporel
+const DEBUT_EXECUTION = new Date();
+// Compte gratuit : limite 6 min → garde-fou à 5 min
+// Compte Workspace/pro : limite 30 min → garde-fou à 28 min
+const LIMITE_EXECUTION_MS = CONFIG.COMPTE_PRO
+  ? 28 * 60 * 1000   // 28 minutes (marge de 2 min avant les 30 min)
+  : 5 * 60 * 1000;   // 5 minutes (marge de 1 min avant les 6 min)
+
+/**
+ * Vérifie si on approche de la limite de temps d'exécution
+ */
+function tempsDepasse() {
+  return (new Date() - DEBUT_EXECUTION) > LIMITE_EXECUTION_MS;
+}
+
+function appelAvecRetry(fn, description) {
+  const MAX_RETRIES = 3;
+  const DELAI_ENTRE_APPELS_MS = 100; // 100ms entre chaque appel API (retry gère les quotas)
+
+  for (let tentative = 1; tentative <= MAX_RETRIES; tentative++) {
+    try {
+      Utilities.sleep(DELAI_ENTRE_APPELS_MS);
+      return fn();
+    } catch (e) {
+      if (e.message && e.message.includes('Quota exceeded') && tentative < MAX_RETRIES) {
+        const attente = tentative * 30; // 30s, 60s
+        Logger.log(`⏳ Quota dépassé pour ${description}, attente ${attente}s (tentative ${tentative}/${MAX_RETRIES})`);
+        Utilities.sleep(attente * 1000);
+      } else {
+        throw e;
+      }
+    }
   }
 }
 
@@ -112,7 +178,16 @@ function synchroniserContactsBidirectionnel() {
 // CHAMPS PEOPLE API
 // ============================================
 
-const PERSON_FIELDS = 'names,emailAddresses,phoneNumbers,addresses,biographies,photos,organizations,metadata';
+const PERSON_FIELDS = [
+  'names', 'emailAddresses', 'phoneNumbers', 'addresses',
+  'biographies', 'photos', 'organizations', 'birthdays',
+  'nicknames', 'relations', 'events', 'urls',
+  'imClients', 'userDefined', 'externalIds',
+  'calendarUrls', 'sipAddresses', 'locations',
+  'occupations', 'interests', 'skills', 'genders',
+  'memberships', 'miscKeywords', 'clientData',
+  'metadata'
+].join(',');
 
 // ============================================
 // RÉCUPÉRATION DES CONTACTS
@@ -135,7 +210,10 @@ function getContactsFromPrimary() {
       options.pageToken = pageToken;
     }
 
-    const response = People.People.Connections.list('people/me', options);
+    const response = appelAvecRetry(
+      () => People.People.Connections.list('people/me', options),
+      'listContacts'
+    );
     if (response.connections) {
       allPersons.push(...response.connections);
     }
@@ -166,6 +244,7 @@ function convertirPersonToObject(person) {
   const bios = person.biographies || [];
   const photos = person.photos || [];
   const orgs = person.organizations || [];
+  const birthdays = person.birthdays || [];
 
   // Photo : URL ou null (pas un blob comme ContactsApp)
   let photoUrl = null;
@@ -194,6 +273,22 @@ function convertirPersonToObject(person) {
     nom = orgs[0].name;
   }
 
+  // Champs supplémentaires (stockés bruts pour ne rien perdre)
+  const champsSupplementaires = {};
+  // memberships inclus — les IDs de groupes sont traduits lors de l'import (voir traduireMemberships)
+  const CHAMPS_BRUTS = [
+    'nicknames', 'relations', 'events', 'urls',
+    'imClients', 'userDefined', 'externalIds',
+    'calendarUrls', 'sipAddresses', 'locations',
+    'occupations', 'interests', 'skills', 'genders',
+    'memberships', 'miscKeywords', 'clientData'
+  ];
+  CHAMPS_BRUTS.forEach(champ => {
+    if (person[champ] && person[champ].length > 0) {
+      champsSupplementaires[champ] = person[champ];
+    }
+  });
+
   return {
     id: person.resourceName,
     resourceName: person.resourceName,
@@ -220,11 +315,21 @@ function convertirPersonToObject(person) {
     })),
     adresse: addresses.length > 0 ? (addresses[0].formattedValue || '') : '',
     toutesLesAdresses: addresses.map(a => ({
-      adresse: a.formattedValue || '',
-      label: a.type || 'home'
+      adresse: a.formattedValue || [a.streetAddress, a.city, a.postalCode, a.region, a.country].filter(Boolean).join(', ') || '',
+      label: a.type || 'home',
+      // Garder les champs structurés pour recréer l'adresse fidèlement
+      streetAddress: a.streetAddress || '',
+      city: a.city || '',
+      postalCode: a.postalCode || '',
+      region: a.region || '',
+      country: a.country || '',
+      countryCode: a.countryCode || '',
+      extendedAddress: a.extendedAddress || ''
     })),
     photoUrl: photoUrl,
     notes: bios.length > 0 ? (bios[0].value || '') : '',
+    anniversaire: birthdays.length > 0 && birthdays[0].date ? birthdays[0].date : null,
+    champsSupplementaires: champsSupplementaires,
     derniereModif: derniereModif,
     contactOriginal: person
   };
@@ -295,54 +400,162 @@ function normaliserTelephone(telephone) {
 }
 
 // ============================================
+// PROGRESSION DE SYNCHRONISATION (reprise entre runs)
+// ============================================
+
+const NOM_FICHIER_PROGRESSION = 'sync_progress.json';
+
+/**
+ * Charge la progression sauvegardée depuis Drive
+ * Retourne un Set de clés déjà traitées, ou un Set vide si pas de progression
+ */
+function chargerProgression() {
+  try {
+    const files = DriveApp.getFilesByName(NOM_FICHIER_PROGRESSION);
+    if (!files.hasNext()) return new Set();
+
+    const file = files.next();
+    const data = JSON.parse(file.getBlob().getDataAsString());
+
+    // Vérifier que la progression n'est pas trop vieille (max 24h)
+    const age = new Date() - new Date(data.timestamp);
+    if (age > 24 * 60 * 60 * 1000) {
+      Logger.log(`🔄 Progression expirée (${Math.round(age / 3600000)}h) — on recommence`);
+      file.setTrashed(true);
+      return new Set();
+    }
+
+    const clesTraitees = new Set(data.clesTraitees || []);
+    Logger.log(`📋 Progression chargée: ${clesTraitees.size} contacts déjà traités (sauvegardé ${new Date(data.timestamp).toLocaleString('fr-FR')})`);
+    return clesTraitees;
+  } catch (e) {
+    Logger.log(`⚠️ Erreur chargement progression: ${e.message}`);
+    return new Set();
+  }
+}
+
+/**
+ * Sauvegarde la progression sur Drive (clés déjà traitées)
+ */
+function sauvegarderProgression(clesTraitees) {
+  try {
+    const data = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      clesTraitees: Array.from(clesTraitees)
+    });
+
+    const files = DriveApp.getFilesByName(NOM_FICHIER_PROGRESSION);
+    if (files.hasNext()) {
+      files.next().setContent(data);
+    } else {
+      DriveApp.createFile(NOM_FICHIER_PROGRESSION, data, MimeType.PLAIN_TEXT);
+    }
+    Logger.log(`💾 Progression sauvegardée: ${clesTraitees.size} contacts traités`);
+  } catch (e) {
+    Logger.log(`⚠️ Erreur sauvegarde progression: ${e.message}`);
+  }
+}
+
+/**
+ * Supprime le fichier de progression (sync terminée)
+ */
+function supprimerProgression() {
+  try {
+    const files = DriveApp.getFilesByName(NOM_FICHIER_PROGRESSION);
+    while (files.hasNext()) {
+      files.next().setTrashed(true);
+    }
+    Logger.log(`🗑️ Progression supprimée (sync complète)`);
+  } catch (e) {
+    Logger.log(`⚠️ Erreur suppression progression: ${e.message}`);
+  }
+}
+
+// ============================================
 // SYNCHRONISATION UNIDIRECTIONNELLE
 // ============================================
 
 /**
  * Synchronise dans une direction (source → destination)
- * AMÉLIORATION: Fusion intelligente au lieu d'écrasement basé sur la date
+ * Utilise la progression sauvegardée pour reprendre là où on s'est arrêté
  */
 function syncDirection(mapSource, mapDestination, direction) {
   Logger.log(`--- Sync ${direction} ---`);
-  
+
+  // Charger la progression des runs précédents
+  const clesDejaTraitees = chargerProgression();
+
   let ajoutes = 0;
   let fusionnes = 0;
-  
-  // Parcourir chaque contact de la source
-  mapSource.forEach((contactSource, cle) => {
-    if (!cle) return; // Ignorer les contacts sans identifiant
-    
-    const identifiant = contactSource.email || contactSource.telephone || contactSource.nom;
-    
-    if (mapDestination.has(cle)) {
-      // Le contact existe déjà dans la destination
-      const contactDest = mapDestination.get(cle);
-      
-      // NOUVELLE STRATÉGIE : Toujours fusionner, pas seulement si plus récent
-      // La fusion intelligente combine les infos sans rien perdre
-      
-      if (CONFIG.DEBUG_MODE) {
-        Logger.log(`🔄 Fusion: ${identifiant}`);
-        Logger.log(`  Source modifié: ${contactSource.derniereModif.toLocaleString('fr-FR')}`);
-        Logger.log(`  Dest modifié: ${contactDest.derniereModif.toLocaleString('fr-FR')}`);
-      }
-      
-      mettreAJourContact(contactDest, contactSource);
-      fusionnes++;
-      
-    } else {
-      // Le contact n'existe pas dans la destination → créer
-      if (CONFIG.DEBUG_MODE) {
-        Logger.log(`➕ Ajout: ${identifiant}`);
-      }
-      creerContact(contactSource);
-      ajoutes++;
+  let ignores = 0;
+  let sautes = 0;
+
+  let erreurs = 0;
+  let interrompu = false;
+  const cles = Array.from(mapSource.keys());
+
+  for (let i = 0; i < cles.length; i++) {
+    const cle = cles[i];
+    if (!cle) continue;
+
+    // Sauter les contacts déjà traités dans un run précédent
+    if (clesDejaTraitees.has(cle)) {
+      sautes++;
+      continue;
     }
-  });
-  
-  Logger.log(`Direction ${direction}: ${ajoutes} ajoutés, ${fusionnes} fusionnés`);
-  
-  return { ajoutes, modifies: fusionnes };
+
+    // Garde-fou temporel : interrompre proprement avant le timeout de 6 min
+    if (tempsDepasse()) {
+      const restant = cles.length - i - sautes;
+      Logger.log(`⏱️ Limite de temps atteinte (5 min). ${i} parcourus, ${clesDejaTraitees.size} déjà traités, ${restant} restant(s).`);
+      interrompu = true;
+      break;
+    }
+
+    const contactSource = mapSource.get(cle);
+    const identifiant = contactSource.email || contactSource.telephone || contactSource.nom;
+
+    try {
+      if (mapDestination.has(cle)) {
+        const contactDest = mapDestination.get(cle);
+        // mettreAJourContact ne fait AUCUN appel API si rien n'a changé (retourne false)
+        const aModifie = mettreAJourContact(contactDest, contactSource);
+        if (aModifie) {
+          fusionnes++;
+        } else {
+          ignores++;
+        }
+      } else {
+        if (CONFIG.DEBUG_MODE) {
+          Logger.log(`➕ Ajout: ${identifiant}`);
+        }
+        creerContact(contactSource);
+        ajoutes++;
+      }
+      // Marquer comme traité (que ce soit ajouté, fusionné ou ignoré)
+      clesDejaTraitees.add(cle);
+    } catch (e) {
+      erreurs++;
+      Logger.log(`❌ Erreur sur contact "${identifiant}": ${e.message}`);
+      if (CONFIG.DEBUG_MODE) {
+        Logger.log(`  Stack: ${e.stack}`);
+      }
+      // On marque quand même comme traité pour ne pas rebloquer au prochain run
+      clesDejaTraitees.add(cle);
+    }
+  }
+
+  // Sauvegarder ou supprimer la progression
+  if (interrompu) {
+    sauvegarderProgression(clesDejaTraitees);
+  } else {
+    // Sync terminée complètement → supprimer la progression
+    supprimerProgression();
+  }
+
+  Logger.log(`Direction ${direction}: ${ajoutes} ajoutés, ${fusionnes} fusionnés, ${ignores} déjà à jour, ${sautes} sautés (déjà traités)` + (erreurs > 0 ? `, ${erreurs} erreur(s)` : '') + (interrompu ? ' ⏱️ INTERROMPU' : ' ✅ COMPLET'));
+
+  return { ajoutes, modifies: fusionnes, erreurs, interrompu, ignores, sautes };
 }
 
 // ============================================
@@ -352,22 +565,17 @@ function syncDirection(mapSource, mapDestination, direction) {
 /**
  * Met à jour un contact existant avec les données d'un autre
  * FUSION INTELLIGENTE : combine les informations au lieu d'écraser
- * Utilise People API pour appliquer les modifications en un seul appel
+ *
+ * OPTIMISATION: Détecte d'abord s'il y a des changements AVANT tout appel API.
+ * Si rien n'a changé, le contact est ignoré (0 appel API au lieu de 2+).
  */
 function mettreAJourContact(contactDestData, dataSource) {
-  const person = contactDestData.contactOriginal;
   const resourceName = contactDestData.resourceName;
+  const identifiant = contactDestData.email || contactDestData.telephone || contactDestData.nom || 'inconnu';
 
-  // Récupérer le contact frais pour avoir l'etag à jour
-  const personFrais = People.People.get(resourceName, {
-    personFields: PERSON_FIELDS
-  });
+  // ─── PHASE 1 : DÉTECTION DES CHANGEMENTS (sans appel API) ───
 
-  // Construire l'objet Person mis à jour
-  const personMisAJour = {
-    resourceName: resourceName,
-    etag: personFrais.etag
-  };
+  const personMisAJour = { resourceName: resourceName };
   let champsModifies = [];
 
   // FUSION DES NOMS
@@ -412,16 +620,140 @@ function mettreAJourContact(contactDestData, dataSource) {
     champsModifies.push('biographies');
   }
 
-  // Appliquer les modifications si nécessaire
-  if (champsModifies.length > 0) {
-    People.People.updateContact(personMisAJour, resourceName, {
-      updatePersonFields: champsModifies.join(','),
-      personFields: PERSON_FIELDS
+  // FUSION DES ANNIVERSAIRES
+  if (!contactDestData.anniversaire && dataSource.anniversaire) {
+    personMisAJour.birthdays = [{ date: dataSource.anniversaire }];
+    champsModifies.push('birthdays');
+    if (CONFIG.DEBUG_MODE) {
+      const d = dataSource.anniversaire;
+      Logger.log(`  🎂 Anniversaire ajouté: ${d.day || '?'}/${d.month || '?'}/${d.year || '?'}`);
+    }
+  }
+
+  // FUSION DES CHAMPS SUPPLÉMENTAIRES (nicknames, relations, events, urls, etc.)
+  // IMPORTANT: memberships traités séparément (via ContactGroups.Members.modify)
+  const CHAMPS_VALEUR_UNIQUE = ['genders'];
+  const champsSupSrc = dataSource.champsSupplementaires || {};
+  const champsSupDest = contactDestData.champsSupplementaires || {};
+  let membershipsAAjouter = [];
+  Object.keys(champsSupSrc).forEach(champ => {
+    if (champ === 'memberships') {
+      membershipsAAjouter = champsSupSrc[champ] || [];
+      return;
+    }
+    if (!champsSupDest[champ] || champsSupDest[champ].length === 0) {
+      let valeur = nettoyerMetadata(champsSupSrc[champ]);
+      if (CHAMPS_VALEUR_UNIQUE.includes(champ)) {
+        valeur = [valeur[0]];
+      }
+      personMisAJour[champ] = valeur;
+      champsModifies.push(champ);
+      if (CONFIG.DEBUG_MODE) {
+        Logger.log(`  📋 Champ "${champ}" ajouté (${valeur.length} entrée(s))`);
+      }
+    } else if (!CHAMPS_VALEUR_UNIQUE.includes(champ)) {
+      const fusionnes = fusionnerChampsGenerique(champsSupDest[champ], champsSupSrc[champ]);
+      if (fusionnes) {
+        personMisAJour[champ] = fusionnes;
+        champsModifies.push(champ);
+        if (CONFIG.DEBUG_MODE) {
+          Logger.log(`  📋 Champ "${champ}" fusionné`);
+        }
+      }
+    }
+  });
+
+  // Vérifier s'il y a des memberships à ajouter (qui ne sont pas déjà présents)
+  let membershipsNouveaux = [];
+  if (membershipsAAjouter.length > 0) {
+    const groupesDest = (champsSupDest.memberships) || [];
+    const groupesDestSet = new Set(groupesDest.map(m =>
+      m.contactGroupMembership && m.contactGroupMembership.contactGroupResourceName
+    ).filter(Boolean));
+
+    membershipsNouveaux = membershipsAAjouter.filter(m => {
+      const cgm = m.contactGroupMembership;
+      if (!cgm || !cgm.contactGroupResourceName) return false;
+      if (cgm.contactGroupResourceName === 'contactGroups/myContacts') return false;
+      return !groupesDestSet.has(cgm.contactGroupResourceName);
     });
   }
 
+  // Vérifier si une photo doit être ajoutée
+  const photoAAjouter = dataSource.photoUrl && !contactDestData.photoUrl;
+
+  // ─── PHASE 2 : RIEN À FAIRE ? → SORTIR (0 appel API) ───
+
+  if (champsModifies.length === 0 && membershipsNouveaux.length === 0 && !photoAAjouter) {
+    // Aucun changement détecté → on passe ce contact sans appel API
+    return false;
+  }
+
+  if (CONFIG.DEBUG_MODE) {
+    Logger.log(`  ✏️ ${champsModifies.length} champ(s) modifié(s)` +
+      (membershipsNouveaux.length > 0 ? `, ${membershipsNouveaux.length} groupe(s)` : '') +
+      (photoAAjouter ? ', +photo' : ''));
+  }
+
+  // ─── PHASE 3 : APPLIQUER LES MODIFICATIONS (appels API uniquement si nécessaire) ───
+
+  if (champsModifies.length > 0) {
+    // Récupérer l'etag frais UNIQUEMENT quand on a des modifications à appliquer
+    let personFrais;
+    try {
+      personFrais = appelAvecRetry(
+        () => People.People.get(resourceName, { personFields: PERSON_FIELDS }),
+        `getContact(${identifiant})`
+      );
+    } catch (e) {
+      if (e.message && e.message.indexOf('not found') !== -1) {
+        Logger.log(`⚠️ Contact introuvable (supprimé ?) : ${identifiant} (${resourceName}) — ignoré`);
+        return false;
+      }
+      throw e;
+    }
+
+    personMisAJour.etag = personFrais.etag;
+
+    try {
+      appelAvecRetry(
+        () => People.People.updateContact(personMisAJour, resourceName, {
+          updatePersonFields: champsModifies.join(','),
+          personFields: PERSON_FIELDS
+        }),
+        `updateContact(${identifiant})`
+      );
+    } catch (e) {
+      if (e.message && e.message.indexOf('not found') !== -1) {
+        Logger.log(`⚠️ Contact disparu avant mise à jour : ${identifiant} (${resourceName}) — ignoré`);
+        return false;
+      }
+      throw e;
+    }
+  }
+
+  // FUSION DES MEMBERSHIPS (via ContactGroups.Members.modify, pas via updateContact)
+  membershipsNouveaux.forEach(m => {
+    const cgm = m.contactGroupMembership;
+    try {
+      appelAvecRetry(
+        () => People.ContactGroups.Members.modify(
+          { resourceNamesToAdd: [resourceName] },
+          cgm.contactGroupResourceName
+        ),
+        `membership(${identifiant} → ${cgm.contactGroupResourceName})`
+      );
+    } catch (e) {
+      Logger.log(`  ⚠️ Impossible d'ajouter au groupe ${cgm.contactGroupResourceName}: ${e.message}`);
+    }
+  });
+
   // FUSION DES PHOTOS (appel séparé requis par l'API)
-  fusionnerPhotos(contactDestData, dataSource);
+  if (photoAAjouter) {
+    fusionnerPhotos(contactDestData, dataSource);
+  }
+
+  return true;
 }
 
 /**
@@ -596,6 +928,8 @@ function fusionnerAdresses(contactDestData, dataSource) {
   const adressesExistantes = (contactDestData.toutesLesAdresses || []).map(a => ({
     adresse: a.adresse,
     adresseNormalisee: normaliserAdresse(a.adresse),
+    postalCode: (a.postalCode || '').trim(),
+    streetAddress: normaliserAdresse(a.streetAddress || ''),
     label: a.label
   }));
 
@@ -604,9 +938,24 @@ function fusionnerAdresses(contactDestData, dataSource) {
 
   dataSource.toutesLesAdresses.forEach(adresseSource => {
     const adresseNormalisee = normaliserAdresse(adresseSource.adresse);
-    const dejaPresente = adressesExistantes.some(existante =>
-      existante.adresseNormalisee === adresseNormalisee
-    );
+    const postalCodeSrc = (adresseSource.postalCode || '').trim();
+    const streetSrc = normaliserAdresse(adresseSource.streetAddress || '');
+
+    const dejaPresente = adressesExistantes.some(existante => {
+      // Comparaison par formattedValue normalisé
+      if (existante.adresseNormalisee && adresseNormalisee &&
+          existante.adresseNormalisee === adresseNormalisee) return true;
+      // Comparaison par code postal + rue (champs structurés)
+      if (postalCodeSrc && existante.postalCode &&
+          postalCodeSrc === existante.postalCode &&
+          streetSrc && existante.streetAddress &&
+          streetSrc === existante.streetAddress) return true;
+      // Comparaison partielle : l'un contient l'autre (ex: "10 Rue X" vs "10 Rue X, 75001 Paris")
+      if (existante.adresseNormalisee && adresseNormalisee &&
+          (existante.adresseNormalisee.includes(adresseNormalisee) ||
+           adresseNormalisee.includes(existante.adresseNormalisee))) return true;
+      return false;
+    });
     if (!dejaPresente && adresseSource.adresse.trim() !== '') {
       nouvellesAdresses.push(adresseSource);
       ajouts++;
@@ -622,8 +971,8 @@ function fusionnerAdresses(contactDestData, dataSource) {
   }
 
   const toutes = [
-    ...adressesExistantes.map(a => ({ formattedValue: a.adresse, type: labelVersAdresse(a.label) })),
-    ...nouvellesAdresses.map(a => ({ formattedValue: a.adresse, type: labelVersAdresse(a.label) }))
+    ...(contactDestData.toutesLesAdresses || []).map(a => construireAdresseAPI(a)),
+    ...nouvellesAdresses.map(a => construireAdresseAPI(a))
   ];
   return toutes;
 }
@@ -705,15 +1054,37 @@ function estContactVide(contact) {
 }
 
 /**
+ * Construit un objet adresse pour l'API People à partir de nos données
+ * Utilise les champs structurés s'ils existent, sinon formattedValue
+ */
+function construireAdresseAPI(a) {
+  const adresse = { type: labelVersAdresse(a.label) };
+  if (a.streetAddress || a.city || a.postalCode) {
+    // Champs structurés disponibles → les utiliser (fidèle à l'original)
+    if (a.streetAddress) adresse.streetAddress = a.streetAddress;
+    if (a.extendedAddress) adresse.extendedAddress = a.extendedAddress;
+    if (a.city) adresse.city = a.city;
+    if (a.postalCode) adresse.postalCode = a.postalCode;
+    if (a.region) adresse.region = a.region;
+    if (a.country) adresse.country = a.country;
+    if (a.countryCode) adresse.countryCode = a.countryCode;
+  }
+  if (a.adresse) adresse.formattedValue = a.adresse;
+  return adresse;
+}
+
+/**
  * Normalise une adresse pour comparaison
- * Retire espaces multiples, ponctuation, met en minuscules
+ * Retire espaces multiples, ponctuation, accents, abréviations
  */
 function normaliserAdresse(adresse) {
   if (!adresse) return '';
 
   return adresse
     .toLowerCase()
-    .replace(/[.,;]/g, '') // Retirer ponctuation
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Retirer accents
+    .replace(/[.,;:'\-\/\\()]/g, ' ') // Ponctuation → espace
+    .replace(/\b(rue|avenue|av|boulevard|bd|blvd|place|pl|chemin|ch|impasse|imp|allée|route|rte)\b/gi, '') // Abréviations courantes
     .replace(/\s+/g, ' ') // Espaces multiples → simple
     .trim();
 }
@@ -721,27 +1092,81 @@ function normaliserAdresse(adresse) {
 /**
  * Fusionne les notes en conservant les deux
  * Retourne l'array biographies ou null si pas de changement
+ * NE MODIFIE PAS les notes si rien de nouveau (évite les mises à jour inutiles)
  */
 function fusionnerNotes(contactDestData, dataSource) {
   const notesDest = contactDestData.notes || '';
   const notesSource = dataSource.notes || '';
 
-  let notesFinales = notesDest;
+  // Rien à fusionner si la source n'a pas de notes
+  if (!notesSource || notesSource.trim() === '') return null;
 
-  if (notesSource && notesSource.trim() !== '' && !notesDest.includes(notesSource)) {
-    if (notesFinales) {
-      notesFinales += '\n---\n' + notesSource;
-    } else {
-      notesFinales = notesSource;
-    }
+  // Vérifier si le contenu source est déjà dans la destination
+  // Nettoyer les marqueurs de sync pour la comparaison
+  const notesDestClean = notesDest.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
+  const notesSourceClean = notesSource.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
+
+  if (!notesSourceClean || notesDestClean.includes(notesSourceClean)) return null;
+
+  let notesFinales = notesDest;
+  if (notesFinales) {
+    notesFinales += '\n---\n' + notesSourceClean;
+  } else {
+    notesFinales = notesSourceClean;
   }
 
-  notesFinales += `\n${CONFIG.PREFIX_NOTES} Fusionné: ${new Date().toLocaleString('fr-FR')}`;
+  if (CONFIG.DEBUG_MODE) {
+    Logger.log(`  📝 Notes fusionnées`);
+  }
 
   return [{
     value: notesFinales,
     contentType: 'TEXT_PLAIN'
   }];
+}
+
+/**
+ * Nettoie les metadata/source IDs d'un tableau de champs People API.
+ * Nécessaire car l'API rejette les source IDs lors de la création/mise à jour.
+ */
+function nettoyerMetadata(champs) {
+  if (!champs || !Array.isArray(champs)) return champs;
+  return champs.map(entree => {
+    const { metadata, ...reste } = entree;
+    return reste;
+  });
+}
+
+/**
+ * Fusion générique pour les champs supplémentaires (relations, events, urls, etc.)
+ * Fait l'union des entrées sans créer de doublons.
+ * Retourne le tableau fusionné (sans metadata) ou null si rien à ajouter.
+ */
+function fusionnerChampsGenerique(champsDest, champsSource) {
+  if (!champsSource || champsSource.length === 0) return null;
+  if (!champsDest || champsDest.length === 0) return nettoyerMetadata(champsSource);
+
+  // Sérialiser chaque entrée pour détecter les doublons
+  const existants = new Set(champsDest.map(e => {
+    // Nettoyer les métadonnées pour la comparaison
+    const { metadata, ...rest } = e;
+    return JSON.stringify(rest);
+  }));
+
+  let aAjoute = false;
+  const resultat = [...champsDest];
+
+  champsSource.forEach(entree => {
+    const { metadata, ...rest } = entree;
+    const cle = JSON.stringify(rest);
+    if (!existants.has(cle)) {
+      resultat.push(entree);
+      existants.add(cle);
+      aAjoute = true;
+    }
+  });
+
+  return aAjoute ? nettoyerMetadata(resultat) : null;
 }
 
 /**
@@ -767,9 +1192,10 @@ function fusionnerPhotos(contactDestData, dataSource) {
     const response = UrlFetchApp.fetch(dataSource.photoUrl);
     const photoBytes = Utilities.base64Encode(response.getContent());
 
-    People.People.updateContactPhoto({
-      photoBytes: photoBytes
-    }, contactDestData.resourceName);
+    appelAvecRetry(
+      () => People.People.updateContactPhoto({ photoBytes: photoBytes }, contactDestData.resourceName),
+      `photo(${contactDestData.email || contactDestData.nom || 'inconnu'})`
+    );
 
     if (CONFIG.DEBUG_MODE) {
       Logger.log(`  📷 Photo de contact ajoutée`);
@@ -783,9 +1209,12 @@ function fusionnerPhotos(contactDestData, dataSource) {
  * Crée un nouveau contact via People API
  */
 function creerContact(data) {
-  // Vérifier qu'on a au moins un identifiant
-  if ((!data.email || data.email.trim() === '') && (!data.telephone || data.telephone.trim() === '')) {
-    Logger.log('⚠️ Impossible de créer un contact sans email ni téléphone');
+  // Vérifier qu'on a au moins un identifiant (email, téléphone ou nom)
+  const aEmail = data.email && data.email.trim() !== '';
+  const aTelephone = data.telephone && data.telephone.trim() !== '';
+  const aNom = data.nom && data.nom.trim() !== '';
+  if (!aEmail && !aTelephone && !aNom) {
+    Logger.log('⚠️ Impossible de créer un contact sans email, téléphone ni nom');
     return null;
   }
 
@@ -819,10 +1248,7 @@ function creerContact(data) {
 
   // Adresses
   if (data.toutesLesAdresses && data.toutesLesAdresses.length > 0) {
-    person.addresses = data.toutesLesAdresses.map(a => ({
-      formattedValue: a.adresse,
-      type: labelVersAdresse(a.label)
-    }));
+    person.addresses = data.toutesLesAdresses.map(a => construireAdresseAPI(a));
   } else if (data.adresse && data.adresse.trim() !== '') {
     person.addresses = [{ formattedValue: data.adresse, type: 'home' }];
   }
@@ -838,26 +1264,84 @@ function creerContact(data) {
     person.organizations = [{ name: data.entreprise, title: data.poste || '', type: 'other' }];
   }
 
-  // Notes
-  if (data.notes) {
-    person.biographies = [{
-      value: data.notes + `\n${CONFIG.PREFIX_NOTES} Créé: ${new Date().toLocaleString('fr-FR')}`,
-      contentType: 'TEXT_PLAIN'
-    }];
+  // Anniversaire
+  if (data.anniversaire) {
+    person.birthdays = [{ date: data.anniversaire }];
   }
 
-  const contactCree = People.People.createContact(person, {
-    personFields: PERSON_FIELDS
-  });
+  // Notes
+  if (data.notes) {
+    // Nettoyer les marqueurs de sync existants avant de copier
+    const notesNettoyees = data.notes.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
+    if (notesNettoyees) {
+      person.biographies = [{
+        value: notesNettoyees,
+        contentType: 'TEXT_PLAIN'
+      }];
+    }
+  }
+
+  // Champs supplémentaires (nicknames, relations, events, urls, etc.)
+  // On nettoie les metadata/source IDs qui sont rejetés par l'API lors de la création
+  // IMPORTANT: memberships exclus du createContact (ajoutés après via l'API ContactGroups)
+  // Certains champs n'acceptent qu'UNE seule valeur par l'API People
+  const CHAMPS_VALEUR_UNIQUE = ['genders'];
+  let membershipsAAjouter = [];
+  if (data.champsSupplementaires) {
+    Object.keys(data.champsSupplementaires).forEach(champ => {
+      if (data.champsSupplementaires[champ] && data.champsSupplementaires[champ].length > 0) {
+        if (champ === 'memberships') {
+          membershipsAAjouter = data.champsSupplementaires[champ];
+          return;
+        }
+        let valeurs = data.champsSupplementaires[champ].map(entree => {
+          const { metadata, ...reste } = entree;
+          return reste;
+        });
+        if (CHAMPS_VALEUR_UNIQUE.includes(champ)) {
+          valeurs = [valeurs[0]];
+        }
+        person[champ] = valeurs;
+      }
+    });
+  }
+
+  const identifiant = data.email || data.telephone || data.nom || 'inconnu';
+  const contactCree = appelAvecRetry(
+    () => People.People.createContact(person, { personFields: PERSON_FIELDS }),
+    `creerContact(${identifiant})`
+  );
+
+  // Memberships (ajout post-création via ContactGroups.Members.modify)
+  if (membershipsAAjouter.length > 0) {
+    membershipsAAjouter.forEach(m => {
+      const cgm = m.contactGroupMembership;
+      if (!cgm || !cgm.contactGroupResourceName) return;
+      // Ignorer le groupe système "myContacts" (ajouté automatiquement)
+      if (cgm.contactGroupResourceName === 'contactGroups/myContacts') return;
+      try {
+        appelAvecRetry(
+          () => People.ContactGroups.Members.modify(
+            { resourceNamesToAdd: [contactCree.resourceName] },
+            cgm.contactGroupResourceName
+          ),
+          `membership(${identifiant} → ${cgm.contactGroupResourceName})`
+        );
+      } catch (e) {
+        Logger.log(`  ⚠️ Impossible d'ajouter au groupe ${cgm.contactGroupResourceName}: ${e.message}`);
+      }
+    });
+  }
 
   // Photo (appel séparé)
   if (data.photoUrl) {
     try {
       const response = UrlFetchApp.fetch(data.photoUrl);
       const photoBytes = Utilities.base64Encode(response.getContent());
-      People.People.updateContactPhoto({
-        photoBytes: photoBytes
-      }, contactCree.resourceName);
+      appelAvecRetry(
+        () => People.People.updateContactPhoto({ photoBytes: photoBytes }, contactCree.resourceName),
+        `photo(${identifiant})`
+      );
     } catch (e) {
       Logger.log(`  ⚠️ Impossible d'ajouter la photo: ${e.toString()}`);
     }
@@ -925,7 +1409,10 @@ function creerMapParCleUnique(contacts, simulationMode, estLocal) {
         // Supprimer uniquement si : config activée, pas en simulation, et contact local
         if (CONFIG.SUPPRIMER_CONTACTS_VIDES && !simulationMode && estLocal && contact.resourceName) {
           try {
-            People.People.deleteContact(contact.resourceName);
+            appelAvecRetry(
+              () => People.People.deleteContact(contact.resourceName),
+              `deleteContact(${contact.resourceName})`
+            );
             contactsVidesSupprimes++;
             if (CONFIG.DEBUG_MODE) {
               Logger.log(`  🗑️ Contact vide supprimé: ${contact.resourceName}`);
@@ -980,6 +1467,7 @@ function fusionnerDeuxContacts(contact1, contact2) {
   // Créer un objet fusionné
   const fusionne = {
     id: base.id,
+    resourceName: base.resourceName,
     nom: base.nom.length >= autre.nom.length ? base.nom : autre.nom,
     prenom: base.prenom.length >= autre.prenom.length ? base.prenom : autre.prenom,
     nomFamille: base.nomFamille.length >= autre.nomFamille.length ? base.nomFamille : autre.nomFamille,
@@ -1067,7 +1555,25 @@ function fusionnerDeuxContacts(contact1, contact2) {
       fusionne.notes = autre.notes;
     }
   }
-  
+
+  // Anniversaire : garder celui qui existe
+  fusionne.anniversaire = base.anniversaire || autre.anniversaire;
+
+  // Champs supplémentaires : fusionner (union sans doublons)
+  const champsSupBase = base.champsSupplementaires || {};
+  const champsSupAutre = autre.champsSupplementaires || {};
+  const tousLesChamps = new Set([...Object.keys(champsSupBase), ...Object.keys(champsSupAutre)]);
+  if (tousLesChamps.size > 0) {
+    fusionne.champsSupplementaires = {};
+    tousLesChamps.forEach(champ => {
+      if (champsSupBase[champ] && champsSupAutre[champ]) {
+        fusionne.champsSupplementaires[champ] = fusionnerChampsGenerique(champsSupBase[champ], champsSupAutre[champ]) || champsSupBase[champ];
+      } else {
+        fusionne.champsSupplementaires[champ] = champsSupBase[champ] || champsSupAutre[champ];
+      }
+    });
+  }
+
   return fusionne;
 }
 
@@ -1149,6 +1655,154 @@ function configurerDeclencheurBidirectionnel() {
  * - Totalement gratuit
  */
 
+/**
+ * Liste tous les groupes de contacts du compte courant
+ * Retourne un tableau { resourceName, name, groupType }
+ */
+function listerGroupesContacts() {
+  const groupes = [];
+  let pageToken = null;
+
+  do {
+    const params = { pageSize: 1000, groupFields: 'name,groupType' };
+    if (pageToken) params.pageToken = pageToken;
+
+    const response = appelAvecRetry(
+      () => People.ContactGroups.list(params),
+      'listerGroupes'
+    );
+
+    if (response.contactGroups) {
+      response.contactGroups.forEach(g => {
+        groupes.push({
+          resourceName: g.resourceName,
+          name: g.name || '',
+          groupType: (g.groupType || 'SYSTEM_CONTACT_GROUP')
+        });
+      });
+    }
+    pageToken = response.nextPageToken;
+  } while (pageToken);
+
+  Logger.log(`📁 ${groupes.length} groupes de contacts trouvés`);
+  return groupes;
+}
+
+/**
+ * Construit un mapping des groupes source → groupes locaux (par nom)
+ * Crée les groupes manquants sur le compte local
+ * Retourne une Map: sourceResourceName → localResourceName
+ */
+function construireMappingGroupes(groupesSource) {
+  if (!groupesSource || groupesSource.length === 0) return new Map();
+
+  // Lister les groupes locaux
+  const groupesLocaux = listerGroupesContacts();
+  const mapLocauxParNom = new Map();
+  groupesLocaux.forEach(g => mapLocauxParNom.set(g.name.toLowerCase(), g.resourceName));
+
+  const mapping = new Map();
+
+  groupesSource.forEach(gs => {
+    const nomLower = (gs.name || '').toLowerCase();
+
+    if (mapLocauxParNom.has(nomLower)) {
+      // Le groupe existe localement → mapper directement
+      mapping.set(gs.resourceName, mapLocauxParNom.get(nomLower));
+    } else if (gs.groupType === 'USER_CONTACT_GROUP' && gs.name) {
+      // Groupe utilisateur absent → le créer
+      try {
+        const nouveau = appelAvecRetry(
+          () => People.ContactGroups.create({ contactGroup: { name: gs.name } }),
+          `creerGroupe(${gs.name})`
+        );
+        mapping.set(gs.resourceName, nouveau.resourceName);
+        Logger.log(`📁 Groupe créé: "${gs.name}" → ${nouveau.resourceName}`);
+      } catch (e) {
+        if (e.message && e.message.includes('409')) {
+          // Doublon — le groupe a été créé entre-temps, relister
+          Logger.log(`⚠️ Groupe "${gs.name}" déjà existant (409), relecture...`);
+          const reliste = listerGroupesContacts();
+          reliste.forEach(g => {
+            if (g.name.toLowerCase() === nomLower) {
+              mapping.set(gs.resourceName, g.resourceName);
+            }
+          });
+        } else {
+          Logger.log(`⚠️ Impossible de créer le groupe "${gs.name}": ${e.message}`);
+        }
+      }
+    } else {
+      // Groupe système non trouvé localement par nom → ignorer
+      Logger.log(`📁 Groupe "${gs.name}" (${gs.resourceName}, ${gs.groupType}) non mappé — pas de correspondance locale`);
+    }
+  });
+
+  Logger.log(`📁 Mapping groupes: ${mapping.size} groupe(s) mappé(s)`);
+  return mapping;
+}
+
+/**
+ * Traduit les memberships d'un contact en utilisant le mapping de groupes
+ * Remplace les resourceName source par les resourceName locaux
+ */
+function traduireMemberships(contacts, mappingGroupes) {
+  if (!mappingGroupes || mappingGroupes.size === 0) {
+    // Pas de mapping disponible → supprimer TOUS les memberships des contacts importés
+    // pour éviter les erreurs "not found" avec des IDs de groupes de l'autre compte
+    let nettoyees = 0;
+    contacts.forEach(contact => {
+      if (contact.champsSupplementaires && contact.champsSupplementaires.memberships) {
+        delete contact.champsSupplementaires.memberships;
+        nettoyees++;
+      }
+    });
+    if (nettoyees > 0) {
+      Logger.log(`📁 Aucun mapping de groupes — ${nettoyees} membership(s) supprimé(s) (l'autre compte n'exporte pas encore les groupes)`);
+    }
+    return;
+  }
+
+  let traduits = 0;
+  let supprimes = 0;
+
+  contacts.forEach(contact => {
+    if (!contact.champsSupplementaires || !contact.champsSupplementaires.memberships) return;
+
+    const membershipsOriginaux = contact.champsSupplementaires.memberships;
+    const membershipsTraduits = [];
+
+    membershipsOriginaux.forEach(m => {
+      const cgm = m.contactGroupMembership;
+      if (!cgm || !cgm.contactGroupResourceName) return;
+
+      const sourceRN = cgm.contactGroupResourceName;
+      if (mappingGroupes.has(sourceRN)) {
+        // Traduire l'ID du groupe
+        membershipsTraduits.push({
+          contactGroupMembership: {
+            contactGroupResourceName: mappingGroupes.get(sourceRN)
+          }
+        });
+        traduits++;
+      } else {
+        // Groupe non mappable (groupe système inconnu, etc.) → ignorer
+        supprimes++;
+      }
+    });
+
+    if (membershipsTraduits.length > 0) {
+      contact.champsSupplementaires.memberships = membershipsTraduits;
+    } else {
+      delete contact.champsSupplementaires.memberships;
+    }
+  });
+
+  if (CONFIG.DEBUG_MODE) {
+    Logger.log(`📁 Memberships: ${traduits} traduit(s), ${supprimes} ignoré(s) (groupe non trouvé)`);
+  }
+}
+
 function exporterContactsVersDrive() {
   const contacts = getContactsFromPrimary();
   // Exclure contactOriginal (objet Person API volumineux) de la sérialisation
@@ -1156,48 +1810,67 @@ function exporterContactsVersDrive() {
     const { contactOriginal, ...reste } = c;
     return reste;
   });
-  const data = JSON.stringify(contactsSerializables);
-  
+
+  // Exporter aussi les groupes de contacts pour le mapping
+  const groupes = listerGroupesContacts();
+
+  const data = JSON.stringify({
+    version: 2,
+    contacts: contactsSerializables,
+    groupes: groupes
+  });
+
   // Créer ou mettre à jour le fichier dans Drive
   const nomFichier = `contacts_${Session.getActiveUser().getEmail()}.json`;
-  
+
   const files = DriveApp.getFilesByName(nomFichier);
   let file;
-  
+
   if (files.hasNext()) {
-    // Mettre à jour le fichier existant
     file = files.next();
     file.setContent(data);
   } else {
-    // Créer un nouveau fichier
     file = DriveApp.createFile(nomFichier, data, MimeType.PLAIN_TEXT);
   }
-  
-  Logger.log(`✅ Contacts exportés vers: ${nomFichier}`);
+
+  Logger.log(`✅ Contacts (${contactsSerializables.length}) et groupes (${groupes.length}) exportés vers: ${nomFichier}`);
   return file.getId();
 }
 
+/**
+ * Importe les contacts depuis le fichier Drive de l'autre compte
+ * Gère les deux formats : v1 (tableau brut) et v2 (objet avec groupes)
+ * Retourne { contacts: [...], groupes: [...] }
+ */
 function importerContactsDepuisDrive(emailAutreCompte) {
   const nomFichier = `contacts_${emailAutreCompte}.json`;
-  
+
   try {
     const files = DriveApp.getFilesByName(nomFichier);
-    
+
     if (!files.hasNext()) {
       Logger.log(`⚠️ Fichier non trouvé: ${nomFichier}`);
-      return [];
+      return { contacts: [], groupes: [] };
     }
-    
+
     const file = files.next();
     const content = file.getBlob().getDataAsString();
-    const contacts = JSON.parse(content);
-    
-    Logger.log(`✅ ${contacts.length} contacts importés depuis: ${nomFichier}`);
-    return contacts;
-    
+    const parsed = JSON.parse(content);
+
+    // Compatibilité : ancien format (tableau brut) vs nouveau format (objet v2)
+    if (Array.isArray(parsed)) {
+      Logger.log(`✅ ${parsed.length} contacts importés depuis: ${nomFichier} (format v1, sans groupes)`);
+      return { contacts: parsed, groupes: [] };
+    }
+
+    const contacts = parsed.contacts || [];
+    const groupes = parsed.groupes || [];
+    Logger.log(`✅ ${contacts.length} contacts et ${groupes.length} groupes importés depuis: ${nomFichier} (format v2)`);
+    return { contacts, groupes };
+
   } catch (error) {
     Logger.log(`❌ Erreur import: ${error.toString()}`);
-    return [];
+    return { contacts: [], groupes: [] };
   }
 }
 
@@ -1207,7 +1880,12 @@ function importerContactsDepuisDrive(emailAutreCompte) {
  */
 function syncViaGoogleDrive() {
   Logger.log('=== SYNC VIA GOOGLE DRIVE ===');
-  
+
+  // Vérifier que le compte secondaire est configuré
+  if (!CONFIG.COMPTE_SECONDAIRE || CONFIG.COMPTE_SECONDAIRE === 'votre-email-secondaire@gmail.com') {
+    throw new Error('❌ COMPTE_SECONDAIRE non configuré. Exécutez configurerCompte() ou ajoutez la propriété dans Paramètres du projet → Propriétés du script.');
+  }
+
   // 0. SAUVEGARDE DE SÉCURITÉ avant toute modification
   creerSauvegardeSecurite();
   
@@ -1215,13 +1893,19 @@ function syncViaGoogleDrive() {
   exporterContactsVersDrive();
   
   // 2. Importer les contacts de l'autre compte
-  const contactsAutreCompte = importerContactsDepuisDrive(CONFIG.COMPTE_SECONDAIRE);
-  
+  const importResult = importerContactsDepuisDrive(CONFIG.COMPTE_SECONDAIRE);
+  const contactsAutreCompte = importResult.contacts;
+  const groupesAutreCompte = importResult.groupes;
+
   if (contactsAutreCompte.length === 0) {
     Logger.log('⚠️ Aucun contact à importer');
     return;
   }
-  
+
+  // 2b. Mapper les groupes de contacts (créer les manquants, traduire les IDs)
+  const mappingGroupes = construireMappingGroupes(groupesAutreCompte);
+  traduireMemberships(contactsAutreCompte, mappingGroupes);
+
   // 3. Fusionner
   const mesContacts = getContactsFromPrimary();
   const mapMesContacts = creerMapParEmail(mesContacts, false, true);
@@ -1229,13 +1913,27 @@ function syncViaGoogleDrive() {
 
   const stats = syncDirection(mapAutres, mapMesContacts, 'drive->local');
   
-  Logger.log(`✅ Sync terminée: ${stats.ajoutes} ajoutés, ${stats.modifies} modifiés`);
-  
+  const erreurs = stats.erreurs || 0;
+  const interrompu = stats.interrompu || false;
+  const ignores = stats.ignores || 0;
+  const sautes = stats.sautes || 0;
+  const duree = Math.round((new Date() - DEBUT_EXECUTION) / 1000);
+  Logger.log(`${interrompu ? '⏱️' : '✅'} Sync terminée en ${duree}s: ${stats.ajoutes} ajoutés, ${stats.modifies} modifiés, ${ignores} déjà à jour, ${sautes} sautés (run précédent)` + (erreurs > 0 ? `, ${erreurs} erreur(s)` : '') + (interrompu ? ' (INTERROMPU — la progression est sauvegardée)' : ''));
+
   // 4. Rapport
-  envoyerRapport(
-    '✅ Synchronisation Drive terminée',
-    `Contacts synchronisés via Google Drive:\n- Ajoutés: ${stats.ajoutes}\n- Modifiés: ${stats.modifies}`
-  );
+  let rapport = `Contacts synchronisés via Google Drive (${duree}s):\n- Ajoutés: ${stats.ajoutes}\n- Modifiés: ${stats.modifies}\n- Déjà à jour: ${ignores}\n- Sautés (traités au run précédent): ${sautes}`;
+  if (erreurs > 0) {
+    rapport += `\n- Erreurs: ${erreurs} (voir les logs pour détails)`;
+  }
+  if (interrompu) {
+    rapport += `\n\n⏱️ INTERROMPU : limite de 5 min atteinte. La progression est sauvegardée, les contacts restants seront traités à la prochaine exécution.`;
+  }
+
+  let sujet = '✅ Synchronisation Drive terminée';
+  if (interrompu) sujet = '⏱️ Synchronisation Drive partielle (temps)';
+  else if (erreurs > 0) sujet = '⚠️ Synchronisation Drive terminée avec erreurs';
+
+  envoyerRapport(sujet, rapport);
 }
 
 function configurerSyncDrive() {
@@ -1258,16 +1956,27 @@ function configurerSyncDrive() {
 
 /**
  * Crée une sauvegarde de sécurité avant synchronisation
- * Conserve les 7 dernières sauvegardes
+ * Ne crée qu'UNE sauvegarde par jour (même si le script tourne toutes les heures)
+ * Conserve les 7 dernières sauvegardes (= 7 jours d'historique)
  */
 function creerSauvegardeSecurite() {
   try {
+    const dossierBackup = obtenirOuCreerDossierBackup();
+
+    // Vérifier si une sauvegarde a déjà été créée aujourd'hui
+    const aujourdhui = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const fichiers = dossierBackup.getFiles();
+    while (fichiers.hasNext()) {
+      const f = fichiers.next();
+      if (f.getName().startsWith('BACKUP_contacts_') && f.getName().includes(aujourdhui)) {
+        Logger.log(`📦 Sauvegarde du jour déjà existante: ${f.getName()} — ignorée`);
+        return;
+      }
+    }
+
     const contacts = getContactsFromPrimary();
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const nomFichier = `BACKUP_contacts_${timestamp}.json`;
-
-    // Créer dossier de sauvegarde si nécessaire
-    const dossierBackup = obtenirOuCreerDossierBackup();
 
     // Exclure contactOriginal de la sérialisation
     const contactsSerializables = contacts.map(c => {
@@ -1401,6 +2110,7 @@ function validerContacts(contacts) {
   const avertissements = [];
   let contactsAvecEmail = 0;
   let contactsAvecTelUniquement = 0;
+  let contactsAvecNomUniquement = 0;
   let contactsSansIdentifiant = 0;
   
   contacts.forEach((contact, index) => {
@@ -1433,12 +2143,18 @@ function validerContacts(contacts) {
         avertissements.push(`Contact ${index + 1} "${contact.nom}": Téléphone invalide - ${contact.telephone}`);
       }
     }
+
+    // VALIDE: Nom uniquement (ex: anniversaires d'enfants)
+    if (!aEmail && !aTelephone && (aNom || aEntreprise)) {
+      contactsAvecNomUniquement++;
+    }
   });
-  
+
   // Afficher les statistiques
   Logger.log('📊 STATISTIQUES DE VALIDATION:');
   Logger.log(`  ✅ Contacts avec email: ${contactsAvecEmail}`);
   Logger.log(`  📱 Contacts avec téléphone uniquement: ${contactsAvecTelUniquement}`);
+  Logger.log(`  👤 Contacts avec nom uniquement: ${contactsAvecNomUniquement}`);
   Logger.log(`  ❌ Contacts sans identifiant: ${contactsSansIdentifiant}`);
   
   if (erreurs.length > 0) {
@@ -1462,17 +2178,18 @@ function simulerSynchronisation() {
   Logger.log('=== MODE SIMULATION (AUCUNE MODIFICATION) ===');
   
   const mesContacts = getContactsFromPrimary();
-  const contactsAutreCompte = importerContactsDepuisDrive(CONFIG.COMPTE_SECONDAIRE);
-  
+  const importResult = importerContactsDepuisDrive(CONFIG.COMPTE_SECONDAIRE);
+  const contactsAutreCompte = importResult.contacts;
+
   if (contactsAutreCompte.length === 0) {
     Logger.log('⚠️ Aucun contact à importer');
     return;
   }
-  
+
   // Validation des contacts
   Logger.log('\n📋 Validation des contacts locaux:');
   validerContacts(mesContacts);
-  
+
   Logger.log('\n📋 Validation des contacts distants:');
   validerContacts(contactsAutreCompte);
   
@@ -1483,20 +2200,23 @@ function simulerSynchronisation() {
   let modifications = 0;
   let contactsAvecEmailAjoutes = 0;
   let contactsAvecTelAjoutes = 0;
-  
+  let contactsAvecNomAjoutes = 0;
+
   // Simuler les ajouts et modifications
   mapAutres.forEach((contact, cle) => {
     const identifiant = contact.email || contact.telephone || contact.nom;
-    
+
     if (!mapMesContacts.has(cle)) {
       const type = cle.startsWith('email:') ? '📧' : cle.startsWith('phone:') ? '📱' : cle.startsWith('org:') ? '🏢' : '👤';
       Logger.log(`[SIMULATION] ${type} Ajouterait: ${identifiant} - ${contact.nom}`);
       ajouts++;
-      
+
       if (contact.email) {
         contactsAvecEmailAjoutes++;
       } else if (contact.telephone) {
         contactsAvecTelAjoutes++;
+      } else {
+        contactsAvecNomAjoutes++;
       }
     } else {
       const monContact = mapMesContacts.get(cle);
@@ -1511,16 +2231,18 @@ function simulerSynchronisation() {
   Logger.log(`Ajouts prévus: ${ajouts}`);
   Logger.log(`  - Avec email: ${contactsAvecEmailAjoutes}`);
   Logger.log(`  - Avec téléphone uniquement: ${contactsAvecTelAjoutes}`);
+  Logger.log(`  - Avec nom uniquement: ${contactsAvecNomAjoutes}`);
   Logger.log(`Modifications prévues: ${modifications}`);
   Logger.log(`Total contacts actuels: ${mesContacts.length}`);
   Logger.log(`Total après synchro: ${mesContacts.length + ajouts}`);
-  
+
   envoyerRapport(
     '🔍 Simulation de synchronisation',
     `Mode simulation (aucune modification réelle):\n\n` +
     `AJOUTS PRÉVUS: ${ajouts}\n` +
     `  • Contacts avec email: ${contactsAvecEmailAjoutes}\n` +
-    `  • Contacts avec téléphone uniquement: ${contactsAvecTelAjoutes}\n\n` +
+    `  • Contacts avec téléphone uniquement: ${contactsAvecTelAjoutes}\n` +
+    `  • Contacts avec nom uniquement: ${contactsAvecNomAjoutes}\n\n` +
     `MODIFICATIONS PRÉVUES: ${modifications}\n\n` +
     `Total actuel: ${mesContacts.length}\n` +
     `Total après sync: ${mesContacts.length + ajouts}\n\n` +

@@ -26,22 +26,26 @@
 - ✅ Automatique (quotidienne configurable)
 - ✅ Manuelle possible à tout moment
 
-### 🧠 Fusion Intelligente
+### 🧠 Fusion Intelligente (25 champs People API)
 - ✅ Combine les infos au lieu d'écraser
 - ✅ Nom le plus complet conservé
 - ✅ Tous les téléphones conservés
 - ✅ Tous les emails conservés
 - ✅ Toutes les adresses conservées
+- ✅ Toutes les organisations conservées
+- ✅ Anniversaires copiés si manquants
 - ✅ Notes combinées
 - ✅ Photos copiées si manquantes
 - ✅ Labels préservés (Domicile/Travail/etc.)
+- ✅ Champs supplémentaires fusionnés (surnoms, relations, événements, URLs, messageries, centres d'intérêt, compétences, lieux, champs personnalisés, etc.)
 
 ### 🔍 Détection de Doublons
 - ✅ Doublons internes détectés (même compte)
 - ✅ Fusion automatique intelligente
 - ✅ Par email (clé primaire)
 - ✅ Par téléphone si pas d'email
-- ✅ Par nom en dernier recours
+- ✅ Par nom si pas de téléphone
+- ✅ Par organisation en dernier recours
 
 ### 📱 Contacts Sans Email
 - ✅ Synchronisation des contacts avec téléphone uniquement
@@ -90,6 +94,8 @@
 - ✅ Restauration
 - ✅ Configuration automatique
 - ✅ DEBUG_MODE pour diagnostics
+- ✅ Throttle API avec retry automatique (quotas)
+- ✅ Envoi email sécurisé (EMAIL_RAPPORT, try/catch DMARC)
 
 ---
 

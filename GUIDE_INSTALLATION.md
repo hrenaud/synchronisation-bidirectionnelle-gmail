@@ -43,34 +43,41 @@
 
 ### 2.3 Personnaliser la configuration
 
-Trouvez cette section au début du code :
+**Le code n'a PAS besoin d'être modifié.** La configuration se fait via les Propriétés du script.
 
-```javascript
-const CONFIG = {
-  COMPTE_SECONDAIRE: 'votre-email-secondaire@gmail.com',
-  PREFIX_NOTES: '[SYNC]',
-  DEBUG_MODE: true,
-  LABEL_SYNC: 'Synchronisés',
-  STRATEGIE_CONFLIT: 'merge',
-  INCLURE_CONTACTS_SANS_EMAIL: true,
-  SUPPRIMER_CONTACTS_VIDES: false,
-  EMAIL_RAPPORT: null
-};
-```
+### 2.3 Configurer les propriétés du script
 
-**Modifiez les lignes suivantes :**
+**Méthode 1 : Via la fonction `configurerCompte`** (recommandé)
 
-1. **`COMPTE_SECONDAIRE`** (OBLIGATOIRE) :
-   - Remplacez `'votre-email-secondaire@gmail.com'` par l'adresse de votre second compte
-   - Exemple : `'mon.autre.email@gmail.com'`
+1. Dans le code, trouvez la fonction `configurerCompte()` (vers le début du fichier)
+2. Modifiez les valeurs :
+   ```javascript
+   PROPS.setProperties({
+     'COMPTE_SECONDAIRE': 'email-de-lautre-compte@gmail.com',
+     'EMAIL_RAPPORT': 'votre-email@gmail.com',
+     'COMPTE_PRO': 'false'  // 'true' pour Workspace/payant, 'false' pour gratuit
+   });
+   ```
+3. Dans le menu déroulant, sélectionnez **`configurerCompte`**
+4. Cliquez sur **Exécuter** ▶️
+5. Les propriétés sont maintenant enregistrées
 
-2. **`EMAIL_RAPPORT`** (recommandé) :
-   - Adresse où recevoir les rapports de synchronisation
-   - Mettez une adresse `@gmail.com` pour éviter les blocages DMARC
-   - Exemple : `EMAIL_RAPPORT: 'votre-nom@gmail.com'`
-   - Si `null`, utilise l'email du compte actif (peut être bloqué par DMARC sur les domaines personnalisés)
+**Méthode 2 : Via l'interface graphique**
 
-- **IMPORTANT : Gardez les guillemets !**
+1. Cliquez sur l'icône **Paramètres du projet** (roue dentée ⚙️) dans le menu de gauche
+2. En bas, section **Propriétés du script**, cliquez sur **Ajouter une propriété**
+3. Ajoutez :
+   - Propriété : `COMPTE_SECONDAIRE` → Valeur : `email-de-lautre-compte@gmail.com`
+   - Propriété : `EMAIL_RAPPORT` → Valeur : `votre-email@gmail.com`
+   - Propriété : `COMPTE_PRO` → Valeur : `true` (Workspace/payant) ou `false` (gratuit)
+4. Cliquez sur **Enregistrer le projet**
+
+> **⏱️ COMPTE_PRO** : Met `true` sur le compte Workspace (limite 28 min) et `false` sur le compte gratuit (limite 5 min avec reprise automatique).
+
+> **💡 Avantage** : Le code est identique sur les deux comptes, seules les propriétés changent.
+> Vous pouvez copier-coller le code sans risque d'erreur.
+
+> **📧 EMAIL_RAPPORT** : Mettez une adresse `@gmail.com` pour éviter les blocages DMARC sur les domaines personnalisés.
 
 ### 2.4 Sauvegarder
 

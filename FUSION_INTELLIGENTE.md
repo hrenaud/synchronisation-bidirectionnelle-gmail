@@ -100,16 +100,35 @@ Résultat:
 
 ### 4️⃣ Fusion des ADRESSES
 
-**Règle : Garder la plus COMPLÈTE**
+**Règle : AJOUTER sans créer de doublons (comme les emails et téléphones)**
 
 ```
-Compte A: "123 Rue de Paris"
-Compte B: "123 Rue de Paris, 75001 Paris, France"
+Compte A: "123 Rue de Paris" (Domicile)
+Compte B: "123 Rue de Paris, 75001 Paris" (Domicile), "50 Av des Champs" (Travail)
 
-Résultat: "123 Rue de Paris, 75001 Paris, France"
+Résultat:
+  123 Rue de Paris, 75001 Paris (Domicile)
+  50 Av des Champs (Travail, ajoutée !)
 ```
 
-**Critère :** L'adresse la plus longue contient généralement plus de détails.
+✅ **Toutes les adresses sont conservées avec leurs labels**
+
+### 5️⃣ Fusion des ANNIVERSAIRES
+
+**Règle : Copier si manquant**
+
+```
+Compte A: Anniversaire 15 mai 2010
+Compte B: [vide]
+
+Résultat: Anniversaire 15 mai 2010 (copié !)
+```
+
+### 6️⃣ Fusion des CHAMPS SUPPLÉMENTAIRES
+
+**Tous les 25 champs People API** sont synchronisés : surnoms, relations (conjoint, enfant...), événements, URLs, messageries, centres d'intérêt, compétences, etc.
+
+**Règle : Union sans doublons** — chaque entrée unique est conservée.
 
 ### 5️⃣ Fusion des NOTES
 
@@ -266,27 +285,23 @@ Vous voyez exactement ce qui est fusionné !
 
 ### Ce que la Fusion Intelligente GARANTIT :
 
+✅ **AUCUN champ perdu** — les 25 champs People API sont synchronisés
 ✅ **Jamais de perte de nom de famille**
 ✅ **Jamais de perte de téléphone**
 ✅ **Jamais de perte d'email**
+✅ **Jamais de perte d'adresse**
 ✅ **Jamais de perte de notes**
+✅ **Jamais de perte d'anniversaire**
 ✅ **Tous les numéros conservés**
 ✅ **Tous les emails conservés**
+✅ **Toutes les adresses conservées**
+✅ **Toutes les relations, surnoms, URLs, événements, etc. conservés**
 
 ### Ce que la Fusion Intelligente NE fait PAS :
 
 ❌ Ne supprime RIEN automatiquement
 ❌ N'écrase pas arbitrairement
 ❌ Ne perd pas d'informations
-
-### Seule Exception : Adresses
-
-Pour les adresses, le script garde **la plus complète** (la plus longue).
-
-**Pourquoi ?** 
-- Éviter les doublons d'adresses
-- Un contact a rarement 2 adresses valides
-- La plus longue contient généralement plus de détails
 
 ---
 
@@ -396,18 +411,10 @@ Si "Marie" est votre préférence, elle sera écrasée.
 **Solution :**
 Choisissez manuellement le nom préféré sur les deux comptes AVANT la première synchro.
 
-### Limitation 3 : Adresse Multiple
+### ~~Limitation 3 : Adresse Multiple~~ (RÉSOLU)
 
-**Problème :**
-```
-Compte A: "Adresse Maison"
-Compte B: "Adresse Bureau"
-
-Résultat: Seulement la plus longue est gardée
-```
-
-**Solution :**
-Google Contacts permet plusieurs adresses. Ajoutez-les toutes sur un compte avant la synchro.
+Les adresses multiples sont maintenant entièrement gérées.
+Toutes les adresses sont conservées avec leurs labels (Domicile, Travail, etc.).
 
 ---
 
@@ -425,8 +432,10 @@ DÉTAILS FUSION:
   - Noms complétés: 12
   - Téléphones ajoutés: 23
   - Emails ajoutés: 8
-  - Adresses améliorées: 5
+  - Adresses ajoutées: 5
+  - Anniversaires ajoutés: 3
   - Notes combinées: 7
+  - Champs supplémentaires: 4
 ```
 
 ---

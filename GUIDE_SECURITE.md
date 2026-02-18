@@ -39,9 +39,9 @@ Avant la synchro → Snapshot complet des contacts → Stocké dans Drive
 
 **Localisation :** Dossier `ContactSync_Backups` dans votre Google Drive
 
-**Rétention :** 7 dernières sauvegardes (1 semaine)
+**Rétention :** 7 dernières sauvegardes (= 7 jours d'historique)
 
-**Automatique :** Oui, à chaque synchronisation
+**Fréquence :** 1 sauvegarde par jour maximum (même si le script tourne toutes les heures)
 
 ### 2. Validation des données
 

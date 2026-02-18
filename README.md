@@ -38,11 +38,23 @@
 - Si un compte a la photo et l'autre non → copiée
 - Jamais écrasées si déjà présentes
 
+### ✅ Groupes de Contacts (Labels)
+- Les groupes de contacts sont synchronisés entre comptes
+- Les groupes manquants sont créés automatiquement
+- Les memberships sont traduits (IDs propres à chaque compte)
+
+### ✅ Gestion du Temps d'Exécution
+- Limite adaptée au type de compte : 5 min (gratuit) ou 28 min (Workspace/pro)
+- Configurable via la propriété `COMPTE_PRO` (`'true'` ou `'false'`)
+- **Reprise automatique** : progression sauvegardée sur Drive entre les runs
+- Les contacts déjà traités sont sautés instantanément au run suivant
+- Détection de changement avant appel API : contacts inchangés = 0 appel API
+
 ### ✅ Sécurité Maximale
-- Sauvegarde automatique avant chaque synchronisation
-- Conserve les 7 dernières sauvegardes
+- Sauvegarde automatique (1 par jour, 7 dernières conservées = 7 jours d'historique)
 - Fonction de restauration d'urgence
 - Validation des données avant traitement
+- Erreurs individuelles ne bloquent pas la sync
 - Logs complets de toutes les opérations
 
 ---
@@ -124,24 +136,24 @@
 
 ## ⚙️ CONFIGURATION
 
-### Dans ContactSync_Advanced.gs
+### Configuration via les Propriétés du script
+
+La configuration sensible (emails) est externalisée dans les **Propriétés du script** (pas dans le code) :
+
+1. Exécutez `configurerCompte()` après avoir modifié les valeurs dans la fonction
+2. Ou allez dans **Paramètres du projet** (⚙️) → **Propriétés du script** → Ajoutez :
+   - `COMPTE_SECONDAIRE` : email de l'autre compte
+   - `EMAIL_RAPPORT` : email pour les rapports (adresse `@gmail.com` recommandée)
+   - `COMPTE_PRO` : `true` pour les comptes Workspace/payants (limite 28 min), `false` ou absent pour les comptes gratuits (limite 5 min)
+
+Les autres paramètres sont dans `CONFIG` dans le code :
 
 ```javascript
 const CONFIG = {
-  // EMAIL DU COMPTE SECONDAIRE (à personnaliser)
-  COMPTE_SECONDAIRE: 'votre-email-secondaire@gmail.com',
-  
-  // STRATÉGIE DE FUSION (recommandé : 'merge')
-  STRATEGIE_CONFLIT: 'merge',  // 'merge' = fusion intelligente
-                                // 'recent' = écrasement (PERTE DE DONNÉES)
-  
-  // CONTACTS SANS EMAIL (recommandé : true)
-  INCLURE_CONTACTS_SANS_EMAIL: true,
-  
-  // LOGS DÉTAILLÉS (recommandé : true pour la première fois)
-  DEBUG_MODE: true,
-  
-  // Autres paramètres (laisser par défaut)
+  STRATEGIE_CONFLIT: 'merge',          // 'merge' = fusion intelligente (RECOMMANDÉ)
+  INCLURE_CONTACTS_SANS_EMAIL: true,   // contacts avec téléphone uniquement
+  SUPPRIMER_CONTACTS_VIDES: false,     // nettoyage optionnel
+  DEBUG_MODE: true,                    // logs détaillés
   PREFIX_NOTES: '[SYNC]',
   LABEL_SYNC: 'Synchronisés'
 };
@@ -149,25 +161,33 @@ const CONFIG = {
 
 ### ⚠️ IMPORTANT
 - Installez le script sur **LES DEUX comptes**
-- Sur compte A : `COMPTE_SECONDAIRE: 'compteB@gmail.com'`
-- Sur compte B : `COMPTE_SECONDAIRE: 'compteA@gmail.com'`
+- Le code est **identique** sur les deux comptes — seules les Propriétés changent
+- Sur compte A : `COMPTE_SECONDAIRE` = `'compteB@gmail.com'`
+- Sur compte B : `COMPTE_SECONDAIRE` = `'compteA@gmail.com'`
 
 ---
 
 ## 📊 CE QUI EST SYNCHRONISÉ
 
+**TOUS les champs People API sont synchronisés (25 champs).** Aucune perte de données.
+
 | Élément | Synchronisé ? | Détails |
 |---------|---------------|---------|
-| **Noms** | ✅ Oui | Version la plus complète |
-| **Prénoms** | ✅ Oui | Version la plus complète |
+| **Noms / Prénoms** | ✅ Oui | Version la plus complète conservée |
 | **Emails** | ✅ Tous | Avec labels (Travail, Perso, etc.) |
 | **Téléphones** | ✅ Tous | Avec labels (Mobile, Fixe, etc.) |
 | **Adresses** | ✅ Toutes | Avec labels (Domicile, Travail, etc.) |
 | **Photos** | ✅ Oui | Copiées si manquantes |
 | **Notes** | ✅ Oui | Combinées avec marqueur |
-| **Entreprises** | ✅ Oui | Préservées |
-| **Dates** | ⚠️ Partiel | LastUpdated utilisé pour conflits |
-| **Groupes** | ⚠️ Futur | Prévu mais pas encore implémenté |
+| **Entreprises / Postes** | ✅ Toutes | Organisations multiples supportées |
+| **Anniversaires** | ✅ Oui | Copiés si manquants |
+| **Surnoms** | ✅ Oui | Fusionnés (union) |
+| **Relations** | ✅ Toutes | Conjoint, enfant, etc. |
+| **Événements** | ✅ Tous | Dates personnalisées |
+| **URLs** | ✅ Toutes | Sites web, profils sociaux |
+| **Messageries (IM)** | ✅ Toutes | Skype, Hangouts, etc. |
+| **Champs personnalisés** | ✅ Tous | userDefined, clientData |
+| **Autres** | ✅ Tous | Centres d'intérêt, compétences, lieux, etc. |
 
 ---
 
@@ -189,6 +209,10 @@ const CONFIG = {
 ✅ Adresses postales
 ✅ Photos
 ✅ Notes
+✅ Anniversaires
+✅ Organisations / Postes
+✅ Surnoms, relations, événements, URLs
+✅ Tous les autres champs (25 champs People API)
 
 ### Protection Contre les Erreurs
 ✅ Aucune suppression automatique
@@ -260,15 +284,25 @@ APRÈS:
 ### Par Défaut
 - **1 fois par jour à 3h du matin**
 
+### Compte gratuit (@gmail.com) — `COMPTE_PRO: 'false'`
+- **Recommandé : toutes les heures** pour la synchronisation initiale (limite de 6 min par exécution)
+- Le script s'interrompt proprement à 5 min et **sauvegarde la progression** sur Drive
+- Au run suivant, les contacts déjà traités sont sautés instantanément
+- Après convergence complète, réduire à 1 fois par jour
+
+### Compte Workspace (payant) — `COMPTE_PRO: 'true'`
+- **1 fois par jour** suffit (limite de 30 min, garde-fou à 28 min)
+- Tous les contacts traités en un seul run
+
 ### Personnalisable
 ```javascript
 // Dans configurerSyncDrive()
 
+// Toutes les heures (recommandé pour compte gratuit au début)
+.everyHours(1)
+
 // Toutes les 6 heures
 .everyHours(6)
-
-// Toutes les heures (attention au quota)
-.everyHours(1)
 
 // Tous les 2 jours
 .everyDays(2)
@@ -368,9 +402,10 @@ Active la synchronisation quotidienne automatique.
 → Synchronisation continue normalement
 
 ### "Pas d'email de rapport"
+→ Cause fréquente : blocage DMARC (domaines personnalisés)
+→ Solution : configurer `EMAIL_RAPPORT: 'votre-nom@gmail.com'`
 → Vérifier le dossier spam
-→ Vérifier que le script s'est bien exécuté (Exécutions)
-→ Vérifier que l'email est correct dans le code
+→ Les rapports sont aussi visibles dans les logs même si l'email échoue
 
 ### "Quota dépassé"
 → Message : "Service invoked too many times"
