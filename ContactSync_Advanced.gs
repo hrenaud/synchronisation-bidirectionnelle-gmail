@@ -335,7 +335,7 @@ function convertirPersonToObject(person) {
 }
 
 /**
- * Génère une clé unique pour un contact
+ * Génère une clé unique pour un contact (clé primaire pour la Map)
  * Priorité : email > téléphone normalisé > nom complet > nom d'entreprise
  */
 function genererCleUnique(contact) {
@@ -364,6 +364,48 @@ function genererCleUnique(contact) {
 
   // Contact invalide sans identifiant
   return null;
+}
+
+/**
+ * Génère TOUTES les clés possibles d'un contact (emails + téléphones)
+ * Utilisé pour la recherche de correspondance cross-account
+ */
+function genererToutesCles(contact) {
+  const cles = new Set();
+
+  // Tous les emails
+  if (contact.tousLesEmails && contact.tousLesEmails.length > 0) {
+    contact.tousLesEmails.forEach(e => {
+      if (e.adresse && e.adresse.trim() !== '') {
+        cles.add('email:' + e.adresse.toLowerCase().trim());
+      }
+    });
+  } else if (contact.email && contact.email.trim() !== '') {
+    cles.add('email:' + contact.email.toLowerCase().trim());
+  }
+
+  // Tous les téléphones
+  if (contact.tousLesTelephones && contact.tousLesTelephones.length > 0) {
+    contact.tousLesTelephones.forEach(t => {
+      const norm = normaliserTelephone(t.numero);
+      if (norm) cles.add('phone:' + norm);
+    });
+  } else if (contact.telephone && contact.telephone.trim() !== '') {
+    const norm = normaliserTelephone(contact.telephone);
+    if (norm) cles.add('phone:' + norm);
+  }
+
+  // Nom et entreprise seulement si aucun email/téléphone
+  if (cles.size === 0) {
+    if (contact.nom && contact.nom.trim() !== '') {
+      cles.add('name:' + contact.nom.toLowerCase().trim());
+    }
+    if (contact.entreprise && contact.entreprise.trim() !== '') {
+      cles.add('org:' + contact.entreprise.toLowerCase().trim());
+    }
+  }
+
+  return cles;
 }
 
 /**
@@ -515,8 +557,9 @@ function syncDirection(mapSource, mapDestination, direction) {
     const identifiant = contactSource.email || contactSource.telephone || contactSource.nom;
 
     try {
-      if (mapDestination.has(cle)) {
-        const contactDest = mapDestination.get(cle);
+      // Chercher par clé primaire ET secondaire (tous emails + téléphones)
+      const contactDest = chercherCorrespondant(contactSource, mapDestination);
+      if (contactDest) {
         // mettreAJourContact ne fait AUCUN appel API si rien n'a changé (retourne false)
         const aModifie = mettreAJourContact(contactDest, contactSource);
         if (aModifie) {
@@ -1392,6 +1435,7 @@ function creerContact(data) {
  */
 function creerMapParCleUnique(contacts, simulationMode, estLocal) {
   const map = new Map();
+  const indexInterne = new Map(); // Index secondaire pour détection doublons (clé secondaire → clé primaire)
   let contactsSansId = 0;
   let contactsVides = 0;
   let contactsVidesSupprimes = 0;
@@ -1407,17 +1451,34 @@ function creerMapParCleUnique(contacts, simulationMode, estLocal) {
     const cle = genererCleUnique(contact);
 
     if (cle) {
-      // Vérifier s'il y a déjà un contact avec cette clé
+      // Vérifier s'il y a déjà un contact avec cette clé primaire
+      // OU avec un email/téléphone en commun (clé secondaire)
+      let cleDoublon = null;
       if (map.has(cle)) {
+        cleDoublon = cle;
+      } else {
+        // Chercher par toutes les clés secondaires (emails + téléphones)
+        const toutesCles = genererToutesCles(contact);
+        for (const c of toutesCles) {
+          if (indexInterne.has(c)) {
+            cleDoublon = indexInterne.get(c);
+            break;
+          }
+        }
+      }
+
+      if (cleDoublon && map.has(cleDoublon)) {
         doublonsDetectes++;
-        Logger.log(`⚠️ Doublon INTERNE détecté pour: ${cle}`);
+        const existant = map.get(cleDoublon);
+        Logger.log(`⚠️ Doublon INTERNE détecté: "${cle}" ↔ "${cleDoublon}"`);
 
-        const existant = map.get(cle);
-
-        // Au lieu de garder seulement le plus récent, FUSIONNER les deux !
+        // Fusionner les deux contacts sous la clé du doublon existant
         const contactFusionne = fusionnerDeuxContacts(existant, contact);
-        map.set(cle, contactFusionne);
+        map.set(cleDoublon, contactFusionne);
         doublonsFusionnes++;
+
+        // Mettre à jour l'index interne avec les nouvelles clés du contact fusionné
+        genererToutesCles(contactFusionne).forEach(c => indexInterne.set(c, cleDoublon));
 
         if (CONFIG.DEBUG_MODE) {
           Logger.log(`  🔄 Doublon fusionné intelligemment`);
@@ -1426,6 +1487,8 @@ function creerMapParCleUnique(contacts, simulationMode, estLocal) {
         }
       } else {
         map.set(cle, contact);
+        // Indexer toutes les clés de ce contact
+        genererToutesCles(contact).forEach(c => indexInterne.set(c, cle));
       }
     } else {
       // Contact sans identifiant valide — vérifier s'il est complètement vide
@@ -1478,8 +1541,46 @@ function creerMapParCleUnique(contacts, simulationMode, estLocal) {
   if (doublonsDetectes > 0) {
     Logger.log(`🔄 ${doublonsDetectes} doublon(s) interne(s) détecté(s) et fusionné(s)`);
   }
-  
+
+  // Attacher l'index secondaire à la map pour la recherche cross-account
+  // (réutilise l'index interne déjà construit pendant la détection de doublons)
+  map._indexSecondaire = indexInterne;
+
   return map;
+}
+
+/**
+ * Cherche un contact correspondant dans la map destination
+ * Vérifie d'abord la clé primaire, puis cherche par TOUS les emails et téléphones
+ * Retourne le contact trouvé ou null
+ */
+function chercherCorrespondant(contactSource, mapDestination) {
+  // 1. Chercher par clé primaire (rapide)
+  const clePrimaire = genererCleUnique(contactSource);
+  if (clePrimaire && mapDestination.has(clePrimaire)) {
+    return mapDestination.get(clePrimaire);
+  }
+
+  // 2. Chercher par toutes les clés secondaires (emails + téléphones)
+  const index = mapDestination._indexSecondaire;
+  if (!index) return null;
+
+  const toutesCles = genererToutesCles(contactSource);
+  for (const cle of toutesCles) {
+    if (index.has(cle)) {
+      const clePrimaireTrouvee = index.get(cle);
+      const contact = mapDestination.get(clePrimaireTrouvee);
+      if (contact) {
+        if (CONFIG.DEBUG_MODE) {
+          const identifiant = contactSource.email || contactSource.telephone || contactSource.nom;
+          Logger.log(`  🔗 Correspondance trouvée par clé secondaire "${cle}" pour: ${identifiant}`);
+        }
+        return contact;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
