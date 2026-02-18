@@ -24,7 +24,6 @@ const CONFIG = {
   COMPTE_PRO: PROPS.getProperty('COMPTE_PRO') === 'true',
 
   // Paramètres modifiables dans le code
-  PREFIX_NOTES: '[SYNC]',
   DEBUG_MODE: true,
   LABEL_SYNC: 'Synchronisés',
 
@@ -1090,37 +1089,66 @@ function normaliserAdresse(adresse) {
 }
 
 /**
+ * Nettoie les marqueurs [SYNC] des notes d'un contact
+ * Retire les lignes "[SYNC] Fusionné: ..." et "[SYNC] Créé: ..." ainsi que les séparateurs orphelins
+ * Retourne le texte nettoyé ou null si rien à nettoyer
+ */
+function nettoyerMarqueursSyncNotes(notes) {
+  if (!notes) return null;
+  const nettoye = notes
+    .replace(/\n?\[SYNC\] (?:Fusionné|Créé):.*$/gm, '')  // Lignes [SYNC]
+    .replace(/(\n---\n)+$/g, '')    // Séparateurs en fin de texte
+    .replace(/^(\n---\n)+/g, '')    // Séparateurs en début de texte
+    .trim();
+  // Retourner null si rien n'a changé
+  if (nettoye === notes.trim()) return null;
+  return nettoye;
+}
+
+/**
  * Fusionne les notes en conservant les deux
  * Retourne l'array biographies ou null si pas de changement
- * NE MODIFIE PAS les notes si rien de nouveau (évite les mises à jour inutiles)
+ * Nettoie aussi les anciens marqueurs [SYNC] s'il y en a
  */
 function fusionnerNotes(contactDestData, dataSource) {
   const notesDest = contactDestData.notes || '';
   const notesSource = dataSource.notes || '';
 
-  // Rien à fusionner si la source n'a pas de notes
-  if (!notesSource || notesSource.trim() === '') return null;
+  // Nettoyer les marqueurs [SYNC] des deux côtés
+  const notesDestClean = nettoyerMarqueursSyncNotes(notesDest) || notesDest.trim();
+  const notesSourceClean = nettoyerMarqueursSyncNotes(notesSource) || notesSource.trim();
 
-  // Vérifier si le contenu source est déjà dans la destination
-  // Nettoyer les marqueurs de sync pour la comparaison
-  const notesDestClean = notesDest.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
-  const notesSourceClean = notesSource.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
+  // Vérifier si les notes destination doivent être nettoyées (anciens marqueurs [SYNC])
+  const destANettoyage = nettoyerMarqueursSyncNotes(notesDest) !== null;
 
-  if (!notesSourceClean || notesDestClean.includes(notesSourceClean)) return null;
-
-  let notesFinales = notesDest;
-  if (notesFinales) {
-    notesFinales += '\n---\n' + notesSourceClean;
-  } else {
-    notesFinales = notesSourceClean;
+  // Vérifier si la source a du contenu nouveau à ajouter
+  let sourceANouveau = false;
+  if (notesSourceClean && notesSourceClean !== '' && !notesDestClean.includes(notesSourceClean)) {
+    sourceANouveau = true;
   }
 
-  if (CONFIG.DEBUG_MODE) {
-    Logger.log(`  📝 Notes fusionnées`);
+  // Rien à faire si pas de nettoyage nécessaire et pas de nouveau contenu
+  if (!destANettoyage && !sourceANouveau) return null;
+
+  // Construire les notes finales
+  let notesFinales = notesDestClean;
+  if (sourceANouveau) {
+    if (notesFinales) {
+      notesFinales += '\n---\n' + notesSourceClean;
+    } else {
+      notesFinales = notesSourceClean;
+    }
+    if (CONFIG.DEBUG_MODE) {
+      Logger.log(`  📝 Notes fusionnées`);
+    }
+  } else if (destANettoyage) {
+    if (CONFIG.DEBUG_MODE) {
+      Logger.log(`  🧹 Marqueurs [SYNC] nettoyés des notes`);
+    }
   }
 
   return [{
-    value: notesFinales,
+    value: notesFinales || '',
     contentType: 'TEXT_PLAIN'
   }];
 }
@@ -1269,10 +1297,9 @@ function creerContact(data) {
     person.birthdays = [{ date: data.anniversaire }];
   }
 
-  // Notes
+  // Notes (nettoyage des anciens marqueurs [SYNC] si présents)
   if (data.notes) {
-    // Nettoyer les marqueurs de sync existants avant de copier
-    const notesNettoyees = data.notes.replace(/\n\[SYNC\] (?:Fusionné|Créé):.*$/gm, '').trim();
+    const notesNettoyees = nettoyerMarqueursSyncNotes(data.notes) || data.notes.trim();
     if (notesNettoyees) {
       person.biographies = [{
         value: notesNettoyees,
@@ -1485,8 +1512,8 @@ function fusionnerDeuxContacts(contact1, contact2) {
     toutesLesAdresses: [...(base.toutesLesAdresses || [])],
     toutesLesOrganisations: [...(base.toutesLesOrganisations || [])],
 
-    // Combiner les notes
-    notes: base.notes || '',
+    // Combiner les notes (nettoyage des anciens marqueurs [SYNC])
+    notes: nettoyerMarqueursSyncNotes(base.notes) || (base.notes || '').trim() || '',
 
     // Photo : garder celle qui existe
     photoUrl: base.photoUrl || autre.photoUrl
@@ -1547,12 +1574,13 @@ function fusionnerDeuxContacts(contact1, contact2) {
     });
   }
   
-  // Combiner les notes
-  if (autre.notes && autre.notes.trim() !== '' && !fusionne.notes.includes(autre.notes)) {
+  // Combiner les notes (nettoyage des anciens marqueurs [SYNC])
+  const autreNotesClean = nettoyerMarqueursSyncNotes(autre.notes) || (autre.notes || '').trim();
+  if (autreNotesClean && autreNotesClean !== '' && !fusionne.notes.includes(autreNotesClean)) {
     if (fusionne.notes) {
-      fusionne.notes += '\n---\n' + autre.notes;
+      fusionne.notes += '\n---\n' + autreNotesClean;
     } else {
-      fusionne.notes = autre.notes;
+      fusionne.notes = autreNotesClean;
     }
   }
 
