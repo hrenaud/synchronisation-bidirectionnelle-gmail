@@ -166,8 +166,8 @@ function synchroniserContactsBidirectionnel() {
   } catch (error) {
     Logger.log('ERREUR: ' + error.toString());
     envoyerRapport(
-      '❌ Erreur synchronisation bidirectionnelle',
-      `Erreur lors de la synchronisation:\n\n${error.toString()}\n\nStack:\n${error.stack}`
+      `❌ Erreur sync [${Session.getActiveUser().getEmail()}]`,
+      `Compte: ${Session.getActiveUser().getEmail()}\nErreur lors de la synchronisation:\n\n${error.toString()}\n\nStack:\n${error.stack}`
     );
     throw error;
   }
@@ -678,13 +678,20 @@ function mettreAJourContact(contactDestData, dataSource) {
   const champsSupSrc = dataSource.champsSupplementaires || {};
   const champsSupDest = contactDestData.champsSupplementaires || {};
   let membershipsAAjouter = [];
-  Object.keys(champsSupSrc).forEach(champ => {
+
+  // Traiter tous les champs : ceux du source ET ceux du destination (pour dédupliquer)
+  const tousLesChampsSup = new Set([...Object.keys(champsSupSrc), ...Object.keys(champsSupDest)]);
+  tousLesChampsSup.forEach(champ => {
     if (champ === 'memberships') {
       membershipsAAjouter = champsSupSrc[champ] || [];
       return;
     }
-    if (!champsSupDest[champ] || champsSupDest[champ].length === 0) {
-      let valeur = nettoyerMetadata(champsSupSrc[champ]);
+    const srcChamp = champsSupSrc[champ];
+    const destChamp = champsSupDest[champ];
+
+    if (srcChamp && srcChamp.length > 0 && (!destChamp || destChamp.length === 0)) {
+      // Champ présent uniquement dans la source → ajouter
+      let valeur = nettoyerMetadata(srcChamp);
       if (CHAMPS_VALEUR_UNIQUE.includes(champ)) {
         valeur = [valeur[0]];
       }
@@ -693,13 +700,14 @@ function mettreAJourContact(contactDestData, dataSource) {
       if (CONFIG.DEBUG_MODE) {
         Logger.log(`  📋 Champ "${champ}" ajouté (${valeur.length} entrée(s))`);
       }
-    } else if (!CHAMPS_VALEUR_UNIQUE.includes(champ)) {
-      const fusionnes = fusionnerChampsGenerique(champsSupDest[champ], champsSupSrc[champ]);
+    } else if (destChamp && destChamp.length > 0 && !CHAMPS_VALEUR_UNIQUE.includes(champ)) {
+      // Champ présent dans la destination → fusionner avec source (si elle existe) + dédupliquer
+      const fusionnes = fusionnerChampsGenerique(destChamp, srcChamp);
       if (fusionnes) {
         personMisAJour[champ] = fusionnes;
         champsModifies.push(champ);
         if (CONFIG.DEBUG_MODE) {
-          Logger.log(`  📋 Champ "${champ}" fusionné`);
+          Logger.log(`  📋 Champ "${champ}" fusionné/dédupliqué (${destChamp.length} → ${fusionnes.length})`);
         }
       }
     }
@@ -1209,27 +1217,67 @@ function nettoyerMetadata(champs) {
 }
 
 /**
+ * Génère une clé de comparaison sémantique pour un champ supplémentaire.
+ * Ignore les champs auto-générés par Google (metadata, formattedType, formattedValue,
+ * formattedProtocol, sourcePrimary, etc.) et trie les clés pour une comparaison stable.
+ */
+function cleSemantiqueChamp(entree) {
+  const CHAMPS_IGNORES = new Set([
+    'metadata', 'formattedType', 'formattedValue', 'formattedProtocol',
+    'sourcePrimary', 'primary'
+  ]);
+  const nettoye = {};
+  Object.keys(entree).sort().forEach(k => {
+    if (!CHAMPS_IGNORES.has(k)) {
+      const val = entree[k];
+      // Normaliser les chaînes (trim + lowercase pour comparaison)
+      if (typeof val === 'string') {
+        nettoye[k] = val.trim();
+      } else {
+        nettoye[k] = val;
+      }
+    }
+  });
+  return JSON.stringify(nettoye);
+}
+
+/**
+ * Déduplique un tableau de champs en utilisant la comparaison sémantique.
+ * Retourne le tableau dédupliqué (sans metadata) ou null si rien n'a changé.
+ */
+function dedupliquerChamps(champs) {
+  if (!champs || champs.length === 0) return null;
+  const vus = new Set();
+  const dedup = [];
+  champs.forEach(entree => {
+    const cle = cleSemantiqueChamp(entree);
+    if (!vus.has(cle)) {
+      vus.add(cle);
+      const { metadata, ...reste } = entree;
+      dedup.push(reste);
+    }
+  });
+  return dedup.length < champs.length ? dedup : null;
+}
+
+/**
  * Fusion générique pour les champs supplémentaires (relations, events, urls, etc.)
  * Fait l'union des entrées sans créer de doublons.
+ * Utilise une comparaison sémantique (ignore metadata, formattedType, etc.)
  * Retourne le tableau fusionné (sans metadata) ou null si rien à ajouter.
  */
 function fusionnerChampsGenerique(champsDest, champsSource) {
-  if (!champsSource || champsSource.length === 0) return null;
+  if (!champsSource || champsSource.length === 0) return dedupliquerChamps(champsDest);
   if (!champsDest || champsDest.length === 0) return nettoyerMetadata(champsSource);
 
-  // Sérialiser chaque entrée pour détecter les doublons
-  const existants = new Set(champsDest.map(e => {
-    // Nettoyer les métadonnées pour la comparaison
-    const { metadata, ...rest } = e;
-    return JSON.stringify(rest);
-  }));
+  // Comparer sémantiquement (ignore formattedType, metadata, etc.)
+  const existants = new Set(champsDest.map(e => cleSemantiqueChamp(e)));
 
   let aAjoute = false;
   const resultat = [...champsDest];
 
   champsSource.forEach(entree => {
-    const { metadata, ...rest } = entree;
-    const cle = JSON.stringify(rest);
+    const cle = cleSemantiqueChamp(entree);
     if (!existants.has(cle)) {
       resultat.push(entree);
       existants.add(cle);
@@ -1237,7 +1285,20 @@ function fusionnerChampsGenerique(champsDest, champsSource) {
     }
   });
 
-  return aAjoute ? nettoyerMetadata(resultat) : null;
+  // Aussi dédupliquer les entrées existantes (nettoyage des doublons accumulés)
+  const vus = new Set();
+  const dedup = [];
+  resultat.forEach(entree => {
+    const cle = cleSemantiqueChamp(entree);
+    if (!vus.has(cle)) {
+      vus.add(cle);
+      const { metadata, ...reste } = entree;
+      dedup.push(reste);
+    }
+  });
+
+  const aChange = aAjoute || dedup.length < resultat.length;
+  return aChange ? dedup : null;
 }
 
 /**
@@ -1368,6 +1429,9 @@ function creerContact(data) {
           const { metadata, ...reste } = entree;
           return reste;
         });
+        // Dédupliquer avant création (peut contenir des doublons hérités de la fusion)
+        const dedup = dedupliquerChamps(valeurs);
+        if (dedup) valeurs = dedup;
         if (CHAMPS_VALEUR_UNIQUE.includes(champ)) {
           valeurs = [valeurs[0]];
         }
@@ -1718,12 +1782,13 @@ function creerMapParEmail(contacts, simulationMode, estLocal) {
  * Envoie un rapport de synchronisation
  */
 function envoyerRapportBidirectionnel(stats) {
-  const sujet = '✅ Synchronisation bidirectionnelle terminée';
+  const compte = Session.getActiveUser().getEmail();
+  const sujet = `✅ Sync contacts terminée [${compte}]`;
 
   const corps = `
 Rapport de Synchronisation Bidirectionnelle
 ==========================================
-
+Compte: ${compte}
 Date: ${new Date().toLocaleString('fr-FR')}
 
 📊 Statistiques:
@@ -1759,8 +1824,8 @@ function configurerDeclencheurBidirectionnel() {
   Logger.log('✅ Déclencheur bidirectionnel configuré');
   
   envoyerRapport(
-    '✅ Synchronisation bidirectionnelle activée',
-    'La synchronisation bidirectionnelle de vos contacts s\'exécutera automatiquement chaque jour à 2h.'
+    `✅ Sync activée [${Session.getActiveUser().getEmail()}]`,
+    `Compte: ${Session.getActiveUser().getEmail()}\nLa synchronisation bidirectionnelle de vos contacts s'exécutera automatiquement chaque jour à 2h.`
   );
 }
 
@@ -2050,17 +2115,18 @@ function syncViaGoogleDrive() {
   Logger.log(`${interrompu ? '⏱️' : '✅'} Sync terminée en ${duree}s: ${stats.ajoutes} ajoutés, ${stats.modifies} modifiés, ${ignores} déjà à jour, ${sautes} sautés (run précédent)` + (erreurs > 0 ? `, ${erreurs} erreur(s)` : '') + (interrompu ? ' (INTERROMPU — la progression est sauvegardée)' : ''));
 
   // 4. Rapport
-  let rapport = `Contacts synchronisés via Google Drive (${duree}s):\n- Ajoutés: ${stats.ajoutes}\n- Modifiés: ${stats.modifies}\n- Déjà à jour: ${ignores}\n- Sautés (traités au run précédent): ${sautes}`;
+  const compte = Session.getActiveUser().getEmail();
+  let rapport = `Compte: ${compte}\nContacts synchronisés via Google Drive (${duree}s):\n- Ajoutés: ${stats.ajoutes}\n- Modifiés: ${stats.modifies}\n- Déjà à jour: ${ignores}\n- Sautés (traités au run précédent): ${sautes}`;
   if (erreurs > 0) {
     rapport += `\n- Erreurs: ${erreurs} (voir les logs pour détails)`;
   }
   if (interrompu) {
-    rapport += `\n\n⏱️ INTERROMPU : limite de 5 min atteinte. La progression est sauvegardée, les contacts restants seront traités à la prochaine exécution.`;
+    rapport += `\n\n⏱️ INTERROMPU : limite de ${CONFIG.COMPTE_PRO ? '28' : '5'} min atteinte. La progression est sauvegardée, les contacts restants seront traités à la prochaine exécution.`;
   }
 
-  let sujet = '✅ Synchronisation Drive terminée';
-  if (interrompu) sujet = '⏱️ Synchronisation Drive partielle (temps)';
-  else if (erreurs > 0) sujet = '⚠️ Synchronisation Drive terminée avec erreurs';
+  let sujet = `✅ Sync Drive terminée [${compte}]`;
+  if (interrompu) sujet = `⏱️ Sync Drive partielle [${compte}]`;
+  else if (erreurs > 0) sujet = `⚠️ Sync Drive avec erreurs [${compte}]`;
 
   envoyerRapport(sujet, rapport);
 }
@@ -2223,8 +2289,8 @@ function restaurerDepuisSauvegarde() {
   // Ce qui est un processus délicat à faire manuellement
   
   envoyerRapport(
-    '⚠️ Restauration disponible',
-    `Une sauvegarde de ${contactsSauvegardes.length} contacts est disponible.\n\nDate: ${sauvegardeRecente.date.toLocaleString('fr-FR')}\n\nConsultez les logs pour plus de détails.`
+    `⚠️ Restauration disponible [${Session.getActiveUser().getEmail()}]`,
+    `Compte: ${Session.getActiveUser().getEmail()}\nUne sauvegarde de ${contactsSauvegardes.length} contacts est disponible.\n\nDate: ${sauvegardeRecente.date.toLocaleString('fr-FR')}\n\nConsultez les logs pour plus de détails.`
   );
   
   return contactsSauvegardes;
@@ -2366,8 +2432,8 @@ function simulerSynchronisation() {
   Logger.log(`Total après synchro: ${mesContacts.length + ajouts}`);
 
   envoyerRapport(
-    '🔍 Simulation de synchronisation',
-    `Mode simulation (aucune modification réelle):\n\n` +
+    `🔍 Simulation [${Session.getActiveUser().getEmail()}]`,
+    `Compte: ${Session.getActiveUser().getEmail()}\nMode simulation (aucune modification réelle):\n\n` +
     `AJOUTS PRÉVUS: ${ajouts}\n` +
     `  • Contacts avec email: ${contactsAvecEmailAjoutes}\n` +
     `  • Contacts avec téléphone uniquement: ${contactsAvecTelAjoutes}\n` +
